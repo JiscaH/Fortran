@@ -221,7 +221,7 @@ contains
     if (FileFormat == 'RAW') then
       nInd = nInd -1   ! header row
     endif
-    allocate(ID(1:nInd))
+    allocate(ID(nInd))
     ID = "NA"
     
     select case (FileFormat)
@@ -313,8 +313,9 @@ contains
       do_transpose = .TRUE.
     endif
     if (do_transpose) then
+      allocate(Geno_tmp(nSnp, 0:nInd))
       Geno_tmp = transpose(Geno)
-      call move_alloc(Geno_tmp, Geno)   ! from, to
+      call move_alloc(Geno_tmp, Geno)   ! from, to 
     endif
     
     
@@ -330,8 +331,8 @@ contains
       valid_alleles = (/'A','C','T','G','1','2'/)
       allocate(alleles(2,nSnp))
       alleles = '0'
-      allocate(Gl(2,1:nInd))
-      allocate(Gint(1:nInd))
+      allocate(Gl(2,nInd))
+      allocate(Gint(nInd))
       
       do l=1, nSnp
         m = 2*(l-1)+1
@@ -373,7 +374,7 @@ contains
   !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   subroutine write_geno(Geno, nInd, nSnp, ID, SNP_names, FileName, FileFormat, make_map)
     integer, intent(IN) :: nInd, nSnp
-    integer(kind=ishort), intent(IN) :: Geno(1:nSnp, 1:nInd)
+    integer(kind=ishort), intent(IN) :: Geno(nSnp,nInd)
     character(len=nchar_ID), intent(IN) :: ID(nInd)
     character(len=nchar_ID), intent(IN), optional :: SNP_names(nSnp)
     logical, intent(IN), optional :: make_map

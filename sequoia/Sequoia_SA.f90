@@ -587,54 +587,25 @@ end subroutine Erstop
 
 program Main
 use Global
-use sqa_fileIO
+use sqa_fileIO, ONLY: checkFile, FileNumRow
 implicit none
 
 integer :: x, i, CalcLLR, AgeEffect, FindMaybe(2), ResumePed, &
   nAmbMax(2), FindMaybeX, NP, date_time_values(8)
-double precision :: TotLL(42), Er!, CurTime(2)
+double precision :: TotLL(42), Er, ErV(3)
 character(len=2) :: ResumePedC, HermC
 character(len=3) :: ErrFlavour, GenoFormat
-character(len=nchar_filename) :: PedFileName, PairsFileName, OutFileName, &
+character(len=nchar_filename) :: PedigreeFileName, PairsFileName, OutFileName, &
   GenoFileName, LifehistFileName, AgePriorFileName, OnlyListFileName, &
   AF_FileName, mt_FileName
 character(len=nchar_filename) :: FN(8)
 logical :: DoDup, DoPar, DoPairs, FileOK, DoReadParents, dupQuiet, &
-  MaybePO_onlyOH, NotDup, withAssignmentLog
+  MaybePO_onlyOH, NotDup, withAssignmentLog, file_exists
 
-! defaults
-quiet = 0  ! 0=not quiet, 1=quiet, -1=verbose
-dupQuiet = .TRUE.
 
-PedFileName  = "NoFile"
-PairsFileName = "NoFile"
-OutFileName = "NoFile"
-AgePriorFileName = "AgePriors.txt"
-OnlyListFileName = 'NoFile'
-AF_FileName = 'NoFile'
-mt_FileName = 'NoFile'   
-GenoFormat = 'SEQ'                   
-
-! MaxSibIter = 42  ! deprecated
-FindMaybe = -1
-nAmbMax = -99
-ResumePedC = "XX"
-ResumePed = -99
-Hermaphrodites = -99
-
-DoDup = .FALSE.
-DoPar = .FALSE.
-DoSibs = .FALSE.
-DoPairs = .FALSE.
-DoReadParents = .TRUE.
-MaybePO_onlyOH = .FALSE.
-NotDup = .FALSE.
-withAssignmentLog = .FALSE.
-
-call checkFile("SequoiaSpecs.txt")
-call ReadSpecs(GenoFileName, LifehistFileName, AgePriorFileName, AgeEffect, &
-  FindMaybeX, CalcLLR, Er, ErrFlavour)
-
+call set_defaults()
+inquire(file="SequoiaSpecs.txt", exist = file_exists)
+if (file_exists)  call ReadSpecs()  ! read arguments from sequoiaspecs.txt
 call read_args()  ! read command line arguments
 
 if (GenoFileName == 'NoFile') then
@@ -642,6 +613,8 @@ if (GenoFileName == 'NoFile') then
   stop
 endif
 
+inquire(file=trim(LifeHistFileName), exist = file_exists)
+if (.not. file_exists .and. LifehistFileName == 'LifeHist.txt') LifehistFileName = 'NoFile'  ! default file name
 if (LifeHistFileName == 'NoFile') then
   AgePriorFileName = 'NoFile'
   if (quiet < 1 .and. (DoPar .or. DoSibs)) then
@@ -650,7 +623,7 @@ if (LifeHistFileName == 'NoFile') then
 endif
 
 ! check if files exist
-FN = (/PedFileName, PairsFileName, GenoFileName, LifehistFileName, &
+FN = (/PedigreeFileName, PairsFileName, GenoFileName, LifehistFileName, &
   AgePriorFileName, OnlyListFileName, AF_FileName, mt_FileName/)
 do i=1,6
   if (FN(i) /= 'NoFile')   call checkFile(FN(i))
@@ -668,8 +641,8 @@ if (quiet < 1) then
   write(*,*) "" 
 endif
 
-call Initiate(GenoFileName, GenoFormat, LifehistFileName, AgePriorFileName, PedFileName, &
- OnlyListFileName, Er, ErrFlavour, AF_FileName, mt_FileName)  
+call Initiate() !GenoFileName, GenoFormat, LifehistFileName, AgePriorFileName, PedigreeFileName, &
+! OnlyListFileName, Er, ErrFlavour, AF_FileName, mt_FileName)  
 
 
 if (DoDup .or. DoPar .or. DoSibs .or. DoPairs .or. any(FindMaybe==1)) then  !  .or. CalcLLR==1
@@ -700,7 +673,7 @@ if (quiet < 1) then
   write(*,*) "@  (*: earliest birthyear for a grandparent of oldest individual)"
   write(*, '(" @ Max age parent: ", i7)') maxAgePO
   if (any(skip)) write(*,*) "@ N in --only   : ", COUNT(.not. skip)
-  write(*,*) "@ Pedigree-IN   : ", trim(PedFileName)
+  write(*,*) "@ Pedigree-IN   : ", trim(PedigreeFileName)
   write(*,'(" @ Genotyping error rate : ", f7.5)') Er  
   write(*,'(" @ Max mismatch  :   DUP:", i4, "  OH:", i4,  "  ME:", i4)') &
    MaxMismatchDup, MaxOppHom, MaxMendelE
@@ -737,7 +710,7 @@ endif
 if (DoPar) then
   print *, ""
   call printt("~~~~~~~  Parentage Assignment  ~~~~~~~~")
-  if (PedFileName /= "NoFile") then
+  if (PedigreeFileName /= "NoFile") then
     ! ReadPedFile() called by initiate()
     if (quiet==-1) call printt("Checking pedigreeIN ...")
     call CheckPedigree(.TRUE., .TRUE.)   ! genotyped parents only ; drop parents of any in --only
@@ -768,12 +741,12 @@ if (DoSibs) then
     call timestamp()
     print *, "Resuming at round: ", ResumePed
   else if (DoReadParents) then
-    if (trim(PedFileName) == "NoFile")  PedFileName = "Parents.txt"
-    call ReadPedFile(PedFileName)
+    if (trim(PedigreeFileName) == "NoFile")  PedigreeFileName = "Parents.txt"
+    call ReadPedFile(PedigreeFileName)
     call UpdateAllProbs()
 !    if (quiet<1)  print *, "# parents: ", COUNT(Parent /= 0, DIM=1)
     if(quiet==-1)  call Rprint("Checking parents / pedigreeIN ...", (/0/), (/0.0D0/), "NON")
-    if (trim(PedFileName) == "Parents.txt") then   ! or if (DoPar) ?
+    if (trim(PedigreeFileName) == "Parents.txt") then   ! or if (DoPar) ?
       call CheckPedigree(.FALSE., .FALSE.)  ! double check parents, using updated ageprior 
     else 
       call CheckPedigree(.FALSE., .TRUE.)  ! drop parents of any in --only
@@ -797,7 +770,7 @@ endif
 !====================================
 ! Calculate parent LLR's for read-in pedigree (analogous to function calcOHLLR() in R)
 !====================================
-if (trim(PedFileName) /= "NoFile" .and. .not. &
+if (trim(PedigreeFileName) /= "NoFile" .and. .not. &
   (DoPar .or. DoSibs .or. DoPairs .or. any(FindMaybe==1))) then
   if (CalcLLR==1) then
     print *, ""
@@ -805,8 +778,8 @@ if (trim(PedFileName) /= "NoFile" .and. .not. &
     print *, ""
 !    call CalcParentLLR   ! done by writeped()
     if (OutFileName == "NoFile") then
-      i = index(PedFileName, ".txt")   ! find location of ".txt"
-      OutFileName = PedFileName(1:(i-1))//"_LLR.txt"
+      i = index(PedigreeFileName, ".txt")   ! find location of ".txt"
+      OutFileName = PedigreeFileName(1:(i-1))//"_LLR.txt"
     endif
     call writeped(OutFileName, .TRUE.)
   else
@@ -814,8 +787,8 @@ if (trim(PedFileName) /= "NoFile" .and. .not. &
     call printt("~~~~~~~  Parent OH only  ~~~~~~~~")
     print *, ""
     if (OutFileName == "NoFile") then
-      i = index(PedFileName, ".txt")   
-      OutFileName = PedFileName(1:(i-1))//"_OH.txt"
+      i = index(PedigreeFileName, ".txt")   
+      OutFileName = PedigreeFileName(1:(i-1))//"_OH.txt"
     endif
     call writeped(OutFileName, .FALSE.)
   endif
@@ -825,8 +798,8 @@ endif
 ! Identify likely (remaining) relatives
 !====================================
 if (ANY(FindMaybe==1)) then
-  if (OutFileName == "NoFile" .and. PedFileName /= "NoFile") then
-    OutFileName = PedFileName
+  if (OutFileName == "NoFile" .and. PedigreeFileName /= "NoFile") then
+    OutFileName = PedigreeFileName
   endif
   
   do x=1,2
@@ -838,7 +811,7 @@ if (ANY(FindMaybe==1)) then
         else
           call printt("~~~~~~~  Checking for likely relatives  ~~~~~~~~")
         endif
-        if (PedFileName /= "NoFile") then
+        if (PedigreeFileName /= "NoFile") then
           call printt("~~~~~~~  (Conditional on pedigree "// trim(OutFileName) //") ~~~~~~~~")
         endif
         print *, ""
@@ -871,13 +844,150 @@ if (quiet < 1)  call printt("Done.")
 call DeAllocAll()
 
 
-!====================================
-! read command line arguments
-!====================================
+
 contains
+  !====================================
+  ! set default values
+  !====================================
+  subroutine set_defaults()
+    quiet = 0  ! 0=not quiet, 1=quiet, -1=verbose
+    dupQuiet = .TRUE.
+
+    PedigreeFileName  = "NoFile"
+    PairsFileName = "NoFile"
+    OutFileName = "NoFile"
+    AgePriorFileName = "AgePriors.txt"
+    OnlyListFileName = 'NoFile'
+    AF_FileName = 'NoFile'
+    mt_FileName = 'NoFile'   
+    GenoFormat = 'SEQ'                   
+
+    ! MaxSibIter = 42  ! deprecated
+    FindMaybe = -1
+    nAmbMax = -99
+    ResumePedC = "XX"
+    ResumePed = -99
+    Hermaphrodites = -99
+
+    DoDup = .FALSE.
+    DoPar = .FALSE.
+    DoSibs = .FALSE.
+    DoPairs = .FALSE.
+    DoReadParents = .TRUE.
+    MaybePO_onlyOH = .FALSE.
+    NotDup = .FALSE.
+    withAssignmentLog = .FALSE.
+    
+    Er = 0.001
+    ErrFlavour = '2.9'
+    ErV = 0D0   ! default: use Er + ErrFlavour
+    MaxMismatchDup = -1
+    MaxOppHom = -1
+    MaxMendelE = -1
+    TF = -2.0
+    TA = 0.5
+
+    GenoFileName = 'Geno.txt'
+    LifehistFileName = 'LifeHist.txt'
+    DumPrefix = (/'F', 'M', 'H'/)
+    maxSibSize = 100
+    Complx = 2
+    Hermaphrodites = 0
+    AgeEffect = 1
+    FindMaybe = 0
+    CalcLLR = 1   
+    mxCP = 50  
+  end subroutine set_defaults
+  
+  !====================================
+  ! read arguments from file
+  !====================================
+  subroutine ReadSpecs()
+    use sqa_fileIO, ONLY: FileNumRow
+    character(len=200) :: tag
+    character(len=nchar_filename)  :: tagvalue
+    integer :: x, ntags
+
+    ntags = FileNumRow("SequoiaSpecs.txt")
+
+    open (unit=101, file="SequoiaSpecs.txt", status="old")
+    do x=1, ntags
+      read(101, *)  tag, tagvalue
+      
+      select case (tag)
+        case ('GenoFile', 'Genofile')
+          GenoFileName = tagvalue
+        case ('LHfile', 'LifeHist', 'LifeHistFile')
+          LifehistFileName = tagvalue
+        case ('AgePriorFile', 'AgePrior', 'ageprior')
+          AgePriorFileName = tagvalue
+        case ('GenotypingErrorRate', 'Err', 'ErrorRate')
+          read(tagvalue(1:20), '(f20.0)')  Er   
+        case ('MaxMismatchDUP', 'Max_dif_dup')
+          read(tagvalue(1:20), '(i20)') MaxMismatchDup
+        case ('MaxMismatchOH', 'Max_OH_PO')
+          read(tagvalue(1:20), '(i20)') MaxOppHom
+        case ('MaxMismatchME', 'Max_ME_PPO')
+          read(tagvalue(1:20), '(i20)') MaxMendelE
+        case ('MaxMismatch')  ! used in version 1.3; both incorrect; now calculated in R
+          read(tagvalue(1:20), '(i20)') MaxMismatchDup    
+          MaxOppHom = MaxMismatchDup - FLOOR(-nSNP * Er)  
+          MaxMendelE = 3*MaxOppHom  
+        case ('Tfilter')
+          read(tagvalue(1:20), '(f20.0)') TF
+        case ('Tassign')
+          read(tagvalue(1:20), '(f20.0)') TA
+        case ('MaxSibshipSize', 'Max_n_offspring')
+          read(tagvalue(1:20), '(i20)') maxSibSize
+        case ('DummyPrefixFemale')
+          read(tagvalue(1:20), '(a20)')  DumPrefix(1) 
+        case ('DummyPrefixMale')
+          read(tagvalue(1:20), '(a20)')  DumPrefix(2)
+        case ('DummyPrefixHerm')
+          read(tagvalue(1:20), '(a20)')  DumPrefix(3)
+        case ('Complexity', 'Complex', 'Complx')
+          read(tagvalue(1:2), '(i2)') Complx
+        case ('Hermaphrodites', 'Herm')
+          read(tagvalue(1:2), '(i2)') Hermaphrodites
+        case ('UseAge', 'AgeEffect')
+          read(tagvalue(1:2), '(i2)') AgeEffect
+        case ('FindMaybeRel', 'GetMaybeRel', 'MaybeRel')
+          read(tagvalue(1:2), '(i2)') FindMaybe
+        case ('CalcLLR')
+          read(tagvalue(1:2), '(i2)') CalcLLR
+        case ('ErrFlavour')
+          read(tagvalue(8:10), '(a3)')  ErrFlavour  
+        case ('MaxCandParents')
+          read(tagvalue(1:20), '(i20)') mxCP     
+        case default
+          ! ignore the rest       
+      end select
+    enddo
+    close(101)
+
+    ! backwards compatability (version 2.1 & 2.2)
+    if (Complx > 2) then    
+      select case (Complx)
+        case (4, 41)
+          Hermaphrodites = 1
+        case (5, 51)
+          Hermaphrodites = 2
+        case default
+          Hermaphrodites = 0  
+      end select
+      if (Complx == 4 .or. Complx == 5)  Complx = 2
+      if (Complx == 41 .or. Complx == 51)  Complx = 1
+    endif
+
+  end subroutine ReadSpecs
+
+
+  !====================================
+  ! read command line arguments
+  !====================================
   subroutine read_args()
     use sqa_fileIO, only: valid_formats    ! genotype formats: SEQ, PED, RAW, LMT
-    integer :: nArg, i, x
+    integer :: nArg, i, x, z
     character(len=32) :: arg, argOption
 
     nArg = command_argument_count()
@@ -959,7 +1069,7 @@ contains
           
         case ('--pedigreeIN')  
           i = i+1
-          call get_command_argument(i, PedFileName)
+          call get_command_argument(i, PedigreeFileName)
           
         case ('--resume')  
           DoSibs = .TRUE.        
@@ -991,13 +1101,16 @@ contains
           read(argOption, *)  Er   
           if (Er <= 0.0 .or. Er > 0.5)  stop 'please provide a genotyping error rate --err >0 and <=0.5'        
 
-        ! case ('--errV')
-          ! do z=1,3
-            ! i = i+1
-            ! call get_command_argument(i, argOption)
-            ! read(argOption, *)  ErV(z)
-            ! if (ErV(z) <= 0.0 .or. ErV(z) > 0.5)  stop 'Genotyping error rates must be >0 and <=0.5'
-          ! enddo
+        case ('--errV')
+          do z=1,3
+            i = i+1
+            call get_command_argument(i, argOption)
+            if (Len_Trim(argOption) == 0 .or. argOption(1:2)=="--") then
+              stop '--errV requires 3 values: hom|other hom, het|hom, and hom|het'
+            endif
+            read(argOption, *)  ErV(z)
+            if (ErV(z) <= 0.0 .or. ErV(z) > 0.5)  stop 'Genotyping error rates must be >0 and <=0.5'
+          enddo
           
         case ('--af', '--maf', '--freq')
           i = i+1
@@ -1095,8 +1208,10 @@ contains
           quiet = -1
           
         case default
-            print '(2a, /)', 'Unrecognised command-line option: ', arg
-            call print_help()
+            print *, ''
+            print *, 'Unrecognised command-line argument: ', arg 
+            print *, 'See --help for valid arguments'
+            !call print_help()
             stop
 
       end select
@@ -1108,13 +1223,13 @@ contains
       stop
     endif
 
-    if (PedFileName/='NoFile' .and. .not. DoReadParents) then
+    if (PedigreeFileName/='NoFile' .and. .not. DoReadParents) then
       write(*,*)  "Cannot combine --pedigreeIN with --nopar;" 
       write(*,*)  "parents.txt is not used when --pedigreeIN specifies a different file."
       stop
     endif
 
-    if (DoSibs .and. .not. DoPar .and. PedFileName/='NoFile') then
+    if (DoSibs .and. .not. DoPar .and. PedigreeFileName/='NoFile') then
       DoReadParents = .FALSE.   ! else read in twice
     endif
 
@@ -1158,8 +1273,9 @@ contains
 
   end subroutine read_args
 
-!=========================
-
+  !====================================
+  ! print overview of command line arguments
+  !====================================
   subroutine print_help()
       print '(a, /)', 'command-line options:'
       print '(a)',    '  -v, --version       print version information and exit'
@@ -1199,8 +1315,8 @@ contains
                       '                        when combined with --ped other siblings are in DummyParents.txt.',&
                       '                        IDs in column 1, or 2 columns with FID (ignored) + IID' 
       print '(a)',    '  --err <value>        presumed genotyping error rate, >0 & <0.5'
-!      print '(a)',    '  --errV <3 values>   alternative to --err: P(observed|actual) for',&
-!                      '                        hom|other hom, het|hom, and hom|het' 
+      print '(a)',    '  --errV <3 values>   alternative to --err: P(observed|actual) for',&
+                      '                        hom|other hom, het|hom, and hom|het' 
       print '(a)',    '  --mt <filename>     optional input file with mitochondrial haplotype sharing'
       print '(a)',    '  --af <filename>     optional input file with allele frequencies. Either',&
                       '                        1 column and no header, or multiple columns with column',&
@@ -1222,128 +1338,122 @@ contains
                       '  [dup] .. [pedigreeIN].. [par] .. [ped] .. [LLR] .. [maybe]'
   end subroutine print_help
     
-end program Main
 
-! ######################################################################
 
-subroutine Initiate(GenoFileName, GenoFormat, LifehistFileName, AgePriorFileName, &
-  PedigreeFileName, OnlyListFileName, Er, ErrFlavour, AF_FileName, mt_FileName)
-use Global
-use sqa_fileIO, ONLY: read_geno
-use sqa_general, ONLY: mk_OcA, InheritanceProbs
-use OHfun, ONLY : init_OH
-implicit none
+  !====================================
+  ! initiate all arrays
+  !====================================
+  subroutine Initiate()
+    use sqa_fileIO, ONLY: read_geno
+    use sqa_general, ONLY: mk_OcA, InheritanceProbs
+    use OHfun, ONLY: init_OH
+    use binom, ONLY: calc_MaxMismatch
 
-character(len=nchar_filename), intent(IN) :: GenoFileName, LifehistFileName, &
-  AgePriorFileName, PedigreeFileName, OnlyListFileName, AF_FileName, mt_FileName
-double precision, intent(IN) :: Er
-character(len=3), intent(IN) :: ErrFlavour, GenoFormat
-integer, allocatable :: BYrange(:,:)                                          
-double precision, allocatable :: AP_IN(:,:), AF(:)
-character(len=nchar_ID), allocatable :: SNP_names(:)  ! not used, output from read_geno()
-integer :: i
+    integer, allocatable :: BYrange(:,:)                                          
+    double precision, allocatable :: AP_IN(:,:), AF(:)
+    character(len=nchar_ID), allocatable :: SNP_names(:)  ! not used, output from read_geno()
+    integer :: i
 
-zero = 0.0D0   ! compiler errors when setting it as global parameter
+    zero = 0.0D0   ! compiler errors when setting it as global parameter
 
-! genotype data  ~~~
-if (quiet < 1)  print *, ""
-if (quiet < 1)  call printt("Reading genotypes in "//trim(GenoFileName)//" ... ")
-call read_geno(Geno=Genos, ID=Id, SNP_names=SNP_names, FileName=GenoFileName, FileFormat=GenoFormat)
-nSnp = SIZE(Genos, DIM=1)
-nInd = SIZE(Genos, DIM=2) -1 ! dim 0:nInd
+    ! genotype data  ~~~
+    if (quiet < 1)  print *, ""
+    if (quiet < 1)  call printt("Reading genotypes in "//trim(GenoFileName)//" ... ")
+    call read_geno(Geno=Genos, ID=Id, SNP_names=SNP_names, FileName=GenoFileName, FileFormat=GenoFormat)
+    nSnp = SIZE(Genos, DIM=1)
+    nInd = SIZE(Genos, DIM=2) -1
 
-! get max ID length (for output files)
-ID_len = MAX(LEN_TRIM(DumPrefix(1)), LEN_TRIM(DumPrefix(2)), LEN_TRIM(DumPrefix(3))) +4   ! min. for writing dummy names
-do i=1,nInd
-  if (LEN_TRIM(Id(i)) > ID_len)  ID_len = LEN_TRIM(Id(i))
-enddo
+    ! get max ID length (for output files)
+    ID_len = MAX(LEN_TRIM(DumPrefix(1)), LEN_TRIM(DumPrefix(2)), LEN_TRIM(DumPrefix(3))) +4   ! min. for writing dummy names
+    do i=1,nInd
+      if (LEN_TRIM(Id(i)) > ID_len)  ID_len = LEN_TRIM(Id(i))
+    enddo
 
-! lifehistory data  ~~~
-allocate(BY(nInd))  
-BY=-999
-allocate(BYrange(nInd,2))
-BYrange=-999            
-allocate(Sex(nInd))
-Sex = 3
-allocate(YearLast(nInd))
-YearLast=999   ! NOTE: POSITIVE!
+    ! lifehistory data  ~~~
+    allocate(BY(nInd))  
+    BY=-999
+    allocate(BYrange(nInd,2))
+    BYrange=-999            
+    allocate(Sex(nInd))
+    Sex = 3
+    allocate(YearLast(nInd))
+    YearLast=999   ! NOTE: POSITIVE!
 
-if (LifehistFileName /= 'NoFile') then
-  if (quiet < 1)  call printt("Reading life history data in "//trim(LifehistFileName)//" ... ")
-  call ReadLifeHist(LifehistFileName, BYrange)
-endif
+    if (LifehistFileName /= 'NoFile') then
+      if (quiet < 1)  call printt("Reading life history data in "//trim(LifehistFileName)//" ... ")
+      call ReadLifeHist(LifehistFileName, BYrange)
+    endif
 
-if (any(YearLast /= 999)) then
-  AnyYearLast = .TRUE.
-else
-  AnyYearLast = .FALSE.
-  deallocate(YearLast)
-endif
+    if (any(YearLast /= 999)) then
+      AnyYearLast = .TRUE.
+    else
+      AnyYearLast = .FALSE.
+      deallocate(YearLast)
+    endif
 
-if (any(Sex==4) .and. hermaphrodites==0) then
-  call Erstop("Please set --herm A or --herm B, found hermaphrodites (Sex=4) in Lifehist file", .FALSE.)
-endif
+    if (any(Sex==4) .and. hermaphrodites==0) then
+      call Erstop("Please set --herm A or --herm B, found hermaphrodites (Sex=4) in Lifehist file", .FALSE.)
+    endif
 
-! ageprior  ~~~
-allocate(AP_IN(MaxMaxAgePO, 5))
-AP_IN = 1D0
-if (AgePriorFileName /= 'NoFile') then
-  if (quiet < 1)  call printt("Reading age priors in "//trim(AgePriorFileName)//" ... ")
-  call ReadAgePrior(AgePriorFileName, AP_IN)
-  if (quiet < 1)  call printt("Prepping age data ... ")
-endif
-call PrepAgeData(AP_IN, BYrange)
-deallocate(BYrange)
-deallocate(AP_IN)
+    ! ageprior  ~~~
+    allocate(AP_IN(MaxMaxAgePO, 5))
+    AP_IN = 1D0
+    if (AgePriorFileName /= 'NoFile') then
+      if (quiet < 1)  call printt("Reading age priors in "//trim(AgePriorFileName)//" ... ")
+      call ReadAgePrior(AgePriorFileName, AP_IN)
+      if (quiet < 1)  call printt("Prepping age data ... ")
+    endif
+    call PrepAgeData(AP_IN, BYrange)
+    deallocate(BYrange)
+    deallocate(AP_IN)
 
-! general prep  ~~~
-if (quiet < 1)  call printt("generating look-up tables with probabilities ... ")
-AF = getAF(AF_FileName)
-OcA = mk_OcA(Er, ErrFlavour)  ! TODO: ErV
-call InheritanceProbs(nSnp, AF, OcA) 
-deallocate(AF)
-call fixbounds_inheritprobs()  ! old (sequoia) vs new (sqa_general) 1:3 vs 0:2 for actual genotype
-call precalc_quicksibs()
-call rchkusr()
+    ! general prep  ~~~
+    if (quiet < 1)  call printt("generating look-up tables with probabilities ... ")
+    AF = getAF(AF_FileName)
+    if (erV(1) > TINY(0D0)) then
+     OcA = mk_OcA(erV)
+    else
+      OcA = mk_OcA(Er, ErrFlavour)
+    endif
+    call InheritanceProbs(nSnp, AF, OcA) 
+    if (MaxMismatchDup < 0) MaxMismatchDup = calc_MaxMismatch(0.9999**(1d0/nInd), AF, OcA(:,2:4), 'DUP')
+    if (MaxOppHom < 0)      MaxOppHom      = calc_MaxMismatch(0.9999**(1d0/nInd), AF, OcA(:,2:4), 'PO ')
+    if (MaxMendelE < 0)     MaxMendelE     = calc_MaxMismatch(0.9999**(1d0/nInd), AF, OcA(:,2:4), 'PPO')
+    deallocate(AF)
+    call fixbounds_inheritprobs()  ! old (sequoia) vs new (sqa_general) 1:3 vs 0:2 for actual genotype
+    call precalc_quicksibs()
+    call rchkusr()
 
-if (quiet < 1)  call printt("Allocating arrays ... ")
-call AllocArrays()
+    if (quiet < 1)  call printt("Allocating arrays ... ")
+    call AllocArrays()
 
-call init_OH()
+    call init_OH()
 
-if (mt_FileName /= 'NoFile') then
-  DoMtDif = .TRUE.
-  call ReadMt(mt_FileName)
-else
-  DoMtDif = .FALSE.
-endif
+    if (mt_FileName /= 'NoFile') then
+      DoMtDif = .TRUE.
+      call ReadMt(mt_FileName)
+    else
+      DoMtDif = .FALSE.
+    endif
 
-! parents ~~~
-! (pedigree prior or prev. assigned parents)
-allocate(DummyNamesIO(nInd, 2))
-DummyNamesIO = "NA"
-if (trim(PedigreeFileName)/= "NoFile") then
-  call ReadPedFile(PedigreeFileName)
-  if (quiet<1)  call timestamp()
-  if (quiet<1)  print *, " # parents: ", COUNT(Parent /= 0, DIM=1)
-endif
+    ! parents ~~~
+    ! (pedigree prior or prev. assigned parents)
+    allocate(DummyNamesIO(nInd, 2))
+    DummyNamesIO = "NA"
+    if (trim(PedigreeFileName)/= "NoFile") then
+      call ReadPedFile(PedigreeFileName)
+      if (quiet<1)  call timestamp()
+      if (quiet<1)  print *, " # parents: ", COUNT(Parent /= 0, DIM=1)
+    endif
 
-!allocate(FSLik(3,3,nSnp,nInd))
-!do i=1, nInd
-!  call CalcFSLik(i)
-!enddo
-
-! only-those-individuals  ~~~
-if (trim(OnlyListFileName)/= "NoFile") then
-  call ReadOnlyList(OnlyListFileName)
-  if (quiet<1)  call timestamp()
-  if (quiet<1)  print *, "--only: ", COUNT(.not. skip), " individuals out of ", nInd
-endif
-
-! call UpdateAllProbs()    ! not if only counting OH
-
-!============
-contains
+    ! only-those-individuals  ~~~
+    if (trim(OnlyListFileName)/= "NoFile") then
+      call ReadOnlyList(OnlyListFileName)
+      if (quiet<1)  call timestamp()
+      if (quiet<1)  print *, "--only: ", COUNT(.not. skip), " individuals out of ", nInd
+    endif
+  end subroutine Initiate
+  
   function getAF(FileName)  result(AF)
     use sqa_fileIO, ONLY: readAF, ilong    
     character(len=*), intent(IN) :: FileName
@@ -1364,7 +1474,7 @@ contains
 
   end function getAF
 
-end subroutine Initiate
+end program Main
 
 ! ####################################################################
 
@@ -1665,7 +1775,7 @@ do i=1,nInd-1
 !    call CalcOppHom(i,j)  ! OH + LLR PO/U  
     LLtmp = missing
     call PairSelf(i, j, LLtmp(1))
-    call CheckPair(i, j,3,7,LL, LLX)   
+    call CheckPair(i, j,3,7,LL, LLX) 
     LLtmp(2) = MaxLL(LL)
     if ((LLtmp(1) - LLtmp(2)) > TF)  then   
       nDupGenos = nDupGenos + 1
@@ -3296,7 +3406,7 @@ if (ALL(nCP==0))  return
 DoLog = .FALSE.
 if (A > 0) then
   fcl = 1
-!  if (A==411 .or. A==458) DoLog = .TRUE.
+  if (A==21) DoLog = .TRUE.
 else !if (A < 0) then
   fcl = 4
 !  if (any(SibID(:,-A, kAIN) == 99) )  DoLog = .TRUE.
@@ -18842,127 +18952,6 @@ end subroutine CheckSelfed
 
 ! #####################################################################
 
-subroutine ReadSpecs(GenoFileName, LifehistFileName, AgePriorFileName, UseAge, FindMaybe, CalcLLR, &
-  Er, ErrFlavour)
-use Global
-use sqa_fileIO, ONLY: FileNumRow
-implicit none
-
-character(len=nchar_filename), INTENT(OUT) :: GenoFileName, LifehistFileName, AgePriorFileName
-integer, intent(OUT) :: UseAge, FindMaybe, CalcLLR
-double precision, intent(OUT) :: Er
-character(len=3), intent(OUT) :: ErrFlavour
-character(len=200) :: tag
-character(len=nchar_filename)  :: tagvalue
-integer :: x, ntags
-
-
-! values that must be specified
-Er = -1D0 
-MaxMismatchDup = -1
-MaxOppHom = -1
-MaxMendelE = -1
-TF = -9999D0
-TA = -9999D0
-
-! defaults
-GenoFileName = 'NoFile'
-LifehistFileName = 'NoFile'
-DumPrefix = (/'F', 'M', 'H'/)
-maxSibSize = 100
-Complx = 2
-Hermaphrodites = 0
-UseAge = 1
-FindMaybe = 0
-CalcLLR = 1
-ErrFlavour = '2.0'
-mxCP = 50
-
-ntags = FileNumRow("SequoiaSpecs.txt")
-
-open (unit=101, file="SequoiaSpecs.txt", status="old")
-do x=1, ntags
-  read(101, *)  tag, tagvalue
-  
-  select case (tag)
-    case ('GenoFile', 'Genofile')
-      GenoFileName = tagvalue
-    case ('LHfile', 'LifeHist', 'LifeHistFile')
-      LifehistFileName = tagvalue
-    case ('AgePriorFile', 'AgePrior', 'ageprior')
-      AgePriorFileName = tagvalue
-    case ('GenotypingErrorRate', 'Err', 'ErrorRate')
-      read(tagvalue(1:20), '(f20.0)')  Er   
-    case ('MaxMismatchDUP', 'Max_dif_dup')
-      read(tagvalue(1:20), '(i20)') MaxMismatchDup
-    case ('MaxMismatchOH', 'Max_OH_PO')
-      read(tagvalue(1:20), '(i20)') MaxOppHom
-    case ('MaxMismatchME', 'Max_ME_PPO')
-      read(tagvalue(1:20), '(i20)') MaxMendelE
-    case ('MaxMismatch')  ! used in version 1.3; both incorrect; now calculated in R
-      read(tagvalue(1:20), '(i20)') MaxMismatchDup    
-      MaxOppHom = MaxMismatchDup - FLOOR(-nSNP * Er)  
-      MaxMendelE = 3*MaxOppHom  
-    case ('Tfilter')
-      read(tagvalue(1:20), '(f20.0)') TF
-    case ('Tassign')
-      read(tagvalue(1:20), '(f20.0)') TA
-    case ('MaxSibshipSize', 'Max_n_offspring')
-      read(tagvalue(1:20), '(i20)') maxSibSize
-    case ('DummyPrefixFemale')
-      read(tagvalue(1:20), '(a20)')  DumPrefix(1) 
-    case ('DummyPrefixMale')
-      read(tagvalue(1:20), '(a20)')  DumPrefix(2)
-    case ('DummyPrefixHerm')
-      read(tagvalue(1:20), '(a20)')  DumPrefix(3)
-    case ('Complexity', 'Complex', 'Complx')
-      read(tagvalue(1:2), '(i2)') Complx
-    case ('Hermaphrodites', 'Herm')
-      read(tagvalue(1:2), '(i2)') Hermaphrodites
-    case ('UseAge', 'AgeEffect')
-      read(tagvalue(1:2), '(i2)') UseAge
-    case ('FindMaybeRel', 'GetMaybeRel', 'MaybeRel')
-      read(tagvalue(1:2), '(i2)') FindMaybe
-    case ('CalcLLR')
-      read(tagvalue(1:2), '(i2)') CalcLLR
-    case ('ErrFlavour')
-      read(tagvalue(8:10), '(a3)')  ErrFlavour  
-    case ('MaxCandParents')
-      read(tagvalue(1:20), '(i20)') mxCP
-  
-    case default
-      ! ignore the rest
-    
-  end select
-
-enddo
-close(101)
-
-if (Complx > 2) then   ! version 2.1 & 2.2
-  select case (Complx)
-    case (4, 41)
-      Hermaphrodites = 1
-    case (5, 51)
-      Hermaphrodites = 2
-    case default
-      Hermaphrodites = 0  
-  end select
-  if (Complx == 4 .or. Complx == 5)  Complx = 2
-  if (Complx == 41 .or. Complx == 51)  Complx = 1
-endif
-
-
-! check values that must be specified
-if (Er < 0)  call Erstop("'GenotypingErrorRate' must be specified in SequoiaSpecs.txt, and >0", .FALSE.)
-if (MaxMismatchDup < 0) call Erstop("'MaxMismatchDUP' must be specified in SequoiaSpecs.txt, and >0", .FALSE.)
-if (MaxOppHom < 0)   call Erstop("'MaxMismatchOH' must be specified in SequoiaSpecs.txt, and >0", .FALSE.)
-if (MaxMendelE < 0)  call Erstop("'MaxMismatchME' must be specified in SequoiaSpecs.txt, and >0", .FALSE.)
-if (TF < -999D0)     call Erstop("'Tfilter' must be specified in SequoiaSpecs.txt", .FALSE.)
-if (TA < -999D0)     call Erstop("'Tassign' must be specified in SequoiaSpecs.txt", .FALSE.)
-
-end subroutine ReadSpecs
-
-! ######################################################################
 
 subroutine ReadLifeHist(LifehistFileName, BYrange)
 use Global
