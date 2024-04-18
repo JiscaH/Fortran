@@ -206,10 +206,10 @@ subroutine Reformat
       read (101,*) dumC, dumC, dumV, G_char
     close(101) 
     if (any(G_char=='A') .or. any(G_char=='C') .or. any(G_char=='G') .or. any(G_char=='T')) then
-      allocate(GenoM(nSnp,nInd))    
+      allocate(GenoM(nSnp,0:nInd))    
       call read_geno(Geno=GenoM, ID=Id, SNP_names=SNP_names, FileName=InFile, &
         FileFormat = InFormat)   ! this also reads the .map file, if any
-      call write_geno(Geno=GenoM, nInd=nInd, nSnp=nSNP, ID=Id, SNP_names=SNP_names, &
+      call write_geno(Geno=GenoM(:,1:nInd), nInd=nInd, nSnp=nSNP, ID=Id, SNP_names=SNP_names, &
         FileName=OutFile, FileFormat=OutFormat, make_map=make_map)  
       deallocate(GenoM)      
       return
