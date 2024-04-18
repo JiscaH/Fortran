@@ -143,16 +143,21 @@ contains
   !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   ! get file extension
   !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-  pure function get_extension(FileName)  result(ext)
+  function get_extension(FileName)  result(ext)
       character(len=7) :: ext
       character(len=*), intent(IN) :: FileName  
-      integer :: dotloc
+      integer :: dotloc, dot2loc
   
       dotloc = index(filename, '.', BACK=.TRUE.)
       if (dotloc == 0) then
         ext = '000'  ! no extension  
       else
-        ext = FileName((dotloc+1):) 
+        dot2loc = index(filename, '..', BACK=.TRUE.)   ! filepath includes .. 
+        if (dot2loc == 0 .or. dotloc > (dot2loc + 1)) then
+          ext = FileName((dotloc+1):)
+        else
+          ext = '000'  ! no extension, only .. in filepath
+        endif
       endif      
       
     end function get_extension
@@ -182,7 +187,7 @@ contains
     if (current_ext == '000') then  ! filename without extension provided
       Name_with_ext = trim(FileName)//'.'//trim(format_ext)
     else if (current_ext /= format_ext) then
-      stop "Genotype file extension not consistent with genotype format"
+      stop "Genotype file extension ."//current_ext//" not consistent with genotype format"
     else
       Name_with_ext = FileName
     endif  
