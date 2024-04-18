@@ -27,7 +27,9 @@ The `imputator` and `sequoia` programs share a set of input/ouput subroutines (`
 gfortran -O3 sqa_fileIO.f90 sqa_general.f90 <file_name>.f90 -o <program_name>
 ```
 
-where the order of `sqa_fileIO.f90` and `sqa_general.f90` does not matter, but both must come before `imputator.f90` or `sequoia.f90`. 
+where the order of `sqa_fileIO.f90` and `sqa_general.f90` does not matter, but both must come before `imputator.f90` or `sequoia.f90`.  
+
+Program `format_geno.f90` uses only `sqa_fileIO.f90`. 
 
 
 ## Genotype format
