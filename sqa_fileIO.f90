@@ -148,7 +148,7 @@ contains
       character(len=*), intent(IN) :: FileName  
       integer :: dotloc
   
-      dotloc = index(filename, '.')
+      dotloc = index(filename, '.', BACK=.TRUE.)
       if (dotloc == 0) then
         ext = '000'  ! no extension  
       else
