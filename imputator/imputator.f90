@@ -17,7 +17,7 @@ module global_variables
   use sqa_fileIO, ONLY: ishort, nchar_ID
   implicit none
 
-  character(len=*), parameter :: version = "0.3.5 (8 April 2024)"
+  character(len=*), parameter :: version = "0.3.6 (19 April 2024)"
   integer, parameter :: chunk_size_large = 100, chunk_size_small=10
   integer :: nIndG, nInd_max, nIndT, nSnp, nMatings, nMat_max
   integer(kind=ishort), allocatable :: Geno(:,:)
@@ -863,9 +863,14 @@ contains
     
     if (with_log .and. (do_snpclean .or. do_impute)) then
       open(unit=unit_log, file=trim(EditsFile))
-      write(unit_log, '(5(a9,2x), 29x,2(a5,2x),3(3a9,2x))') 'snp_index', 'snp_name',  &
-        'threshold', 'id_index', 'id_name', 'g_in', 'g_out', 'prob_0', 'prob_1', 'prob_2', &
-        'p_ant_0', 'p_ant_1', 'p_ant_2', 'p_post_0', 'p_post_1', 'p_post_2'
+      write(unit_log, '(2(a9,2x),31x,3(a9,2x),29x, 2(a5,2x),3a9,2x)', advance='no') &
+        'snp_index', 'snp_name', 'threshold', 'id_index', 'id_name', &
+        'g_in', 'g_out', 'prob_0', 'prob_1', 'prob_2'        
+      if (method=='full') then
+        write(unit_log, '(2(3a9,2x))')  'p_ant_0', 'p_ant_1', 'p_ant_2', 'p_post_0', 'p_post_1', 'p_post_2'
+      else
+        write(unit_log, *)   ! line break
+      endif         
     endif
     
     if (do_impute_all) then
@@ -888,6 +893,7 @@ contains
       Gl(0:nIndG) = Geno(:,l) 
       Gprob = 0D0
       
+      if (method=='common' .or. method=='hom' .or. method=='het')  call set_gprob_to_gfreq(l)
       if (method=='parents')   call swift_impute(l)
       if (method=='ancestors' .or. method=='full')  call init_gprobs(l)
       if (method=='ancestors') call quick_set_ant()
@@ -952,56 +958,37 @@ contains
       real, intent(IN) :: Threshold
       integer :: i!,x
       integer(kind=ishort) :: g_new
-      double precision :: p_not_err, i_ap(2,0:2), lp_err!, lp_not_err, ref_unif
+      double precision :: p_not_err, lp_err
         
       p_not_err = (OcA(0,0) + OcA(1,1) + OcA(2,2))/3d0
       lp_err = log(1-p_not_err)
- !     lp_not_err = log(p_not_err)
-   !     forall (x=0:2)  ref_lp(x) = log(1-OcA(x,x))
- !     ref_unif = log(1d0/3)   ! too arbitrary?   ! = new doubt_threshold
- !     write(*, '("ref_lp:  ", 3f12.5)')  lp_err, lp_not_err, ref_unif
-      ! print *, ''
-
       do i=1,nIndG
-        ! TODO: loop over matings instead?
-        if (Gl(i) == -1)  cycle
-        i_ap(1,:) = lp_ant(:,i)
-        i_ap(2,:) = logScale(mates_post(i))
-        
-        ! if (i==79) then
-          ! write(*,'(i5, 2x, a12, 2x, i5, ";", i5, ";", 10i5)') i, pop(i)%ID, gl(i), &
-            ! indiv2mating(i), pop(i)%offspring_m
-          ! write(*, '("ant:  ", 3f10.4)') lp_ant(:,i)
-          ! write(*, '("post: ", 3f10.4)') i_ap(2,:)
-          ! write(*, '("gpr:  ", 3f10.4)') Gprob(:,i)
-          ! print *, ''
-          ! write(*, '("ant:  ", 3f9.5)') exp(lp_ant(:,i))
-          ! write(*, '("post: ", 3f9.5)') exp(i_ap(2,:))
-          ! write(*, '("gpr:  ", 3f9.5)') exp(Gprob(:,i))
-          ! print *, ''
-        ! endif        
-        
-        if (Gprob(Gl(i),i) < lp_err) then  !log(Threshold))  then
-   !       Gprob_excl = calc_g_prob(i, excl_self=.TRUE.)  
+        if (Gl(i) == -1)  cycle          
+        if (Gprob(Gl(i),i) < lp_err) then  !log(Threshold))  then  
           ! DO NOT EXLUDE SELF: else doesn't resolve whether parent or offspring
           ! is more likely to have error when they conflict. 
-    !      if (any(Gprob(:,i) >= lp_not_err)) then
-    !        g_new = MAXLOC(Gprob(:,i), DIM=1, KIND=ishort) -1_ishort
-    !      else
-            g_new = -1
-     !     endif
-          write(unit_log, '(i9,2x,a40,2x,f9.5,2x,i9,2x,a40,2(i5,2x),3(3f9.5,2x))') l, SNP_names(l), &
-           Threshold, i, pop(i)%ID, Gl(i), g_new, exp(Gprob(:,i)), exp(lp_ant(:,i)), exp(i_ap(2,:))
-          Gl(i) = g_new
-  !      else if (any(i_ap(:,Gl(i)) < lp_err) .and. all(i_ap(:,Gl(i)) < ref_unif)) then
-  !        g_new = -1  !Gl(i)
-  !        write(unit_log, '(i9,2x,a9,2x,f9.5,2x,i9,2x,a40,2(i5,2x),3(3f9.5,2x))') l, SNP_names(l), &
-  !         Threshold, i, pop(i)%ID, Gl(i), g_new, exp(Gprob(:,i)), exp(lp_ant(:,i)), exp(i_ap(2,:))  
-  !        Gl(i) = g_new           
+          g_new = -1
+          if (with_log)  call write_log(l, i, g_new, Threshold)
+          Gl(i) = g_new         
         endif       
       enddo
     
     end subroutine clean_snp 
+    
+    !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    ! if method=common, set Gprob to genotype frequencies
+    !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    subroutine set_gprob_to_gfreq(l)
+      integer, intent(IN) :: l
+      double precision :: Gfreq_tmp(0:2)
+      integer :: x
+      
+      Gfreq_tmp = G_freq(l)
+      do x=0,2
+        Gprob(x,:) = log(Gfreq_tmp(x))
+      enddo
+      
+    end subroutine set_gprob_to_gfreq
 
   end subroutine clean_n_impute
   
@@ -1102,7 +1089,7 @@ contains
     do i=1,N
       if (Gl(i) /= -1)  cycle
       if (ALL(Gprob(:,i) < log(Threshold)))  cycle
-      if (COUNT(Gprob(:,i) >= doubt_threshold) > 1) then    
+      if (COUNT(Gprob(:,i) >= doubt_threshold) > 1 .or. method=='hom' .or. method=='het') then    
         select case (imp_default)
           case ('het')  
             g_new = 1
@@ -1118,14 +1105,31 @@ contains
       else 
         g_new = MAXLOC(Gprob(:,i), DIM=1, KIND=ishort) -1_ishort
       endif
-      if (with_log) then
-        write(unit_log, '(i9,2x,a40,2x,f9.5,2x,i9,2x,a40,2(i5,2x),3(3f9.5,2x))') l, SNP_names(l), &
-        Threshold, i, pop(i)%ID, Gl(i), g_new, exp(Gprob(:,i))!, exp(lp_ant(:,i)), exp(get_post(i))   
-      endif
+      if (with_log)  call write_log(l,i,g_new, Threshold)
       Gl(i) = g_new
     enddo  
   
   end subroutine impute_snp 
+  
+  
+  !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  ! write edit (clean or impute) to log file 
+  !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  subroutine write_log(l, i, g_new, Threshold)
+    integer, intent(IN) :: l, i
+    integer(kind=ishort), intent(IN) :: g_new
+    real, intent(IN) :: Threshold
+    
+    write(unit_log, '(i9,2x,a40,2x,f9.5,2x,i9,2x,a40,2(i5,2x), 3f9.5,2x)', advance='no') &
+      l, SNP_names(l), Threshold, i, pop(i)%ID, Gl(i), g_new, exp(Gprob(:,i))
+    if (method=='full') then
+      write(unit_log, '(2(3f9.5,2x))')  exp(lp_ant(:,i)), exp(get_post(i))
+    else
+      write(unit_log, *)   ! line break
+    endif
+
+  end subroutine write_log
+  
   
   !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   ! iteratively calculate anterior & posterior probabilities until genotype 
@@ -1234,6 +1238,8 @@ contains
     
     call CheckFile(trim(editFile))    
     N_edits = FileNumRow(trim(editFile)) -1  ! 1st row = header
+    
+    print *, 'applying ', N_edits, ' edits to genotype file ...'
     
     open (5, file=trim(editFile), action='read')
       read (5,*)  ! header
@@ -1500,8 +1506,6 @@ program main
   if (do_pedclean) then
     if (.not. quiet)  call printt('cleaning pedigree ... ')   
     call clean_pedigree('pedclean_edits.txt', Threshold_pedclean)
-  else
-    if (.not. quiet)  call printt('skipping pedigree cleaning ...')
   endif
   
   if (do_pedclean .or. do_snpclean .or. do_impute) then 
@@ -1701,7 +1705,7 @@ contains
           case ('--edits-in')
             i = i+1
             call get_command_argument(i, EditsFile)
-            only_read_edits   = .TRUE.
+            only_read_edits = .TRUE.
 
           case ('--quiet')
             quiet = .TRUE.
@@ -1715,7 +1719,14 @@ contains
         end select
       end do
     endif
-       
+
+    if (only_read_edits) then
+      do_pedigree = .FALSE.
+      do_snpclean = .FALSE.
+      do_impute = .FALSE.
+      do_geno_out = .TRUE.
+    endif   
+    
     if (.not. do_pedigree) then    ! backwards compatability
       method = imp_default
       if (imp_default=='com')  method = 'common'
@@ -1729,13 +1740,6 @@ contains
     if (method=='parents' .and. do_pedclean) then
       print *, "'--method parents' currently not compatible with pedigree cleaning"
       do_pedclean = .FALSE.
-    endif
-    
-    
-    if (only_read_edits) then
-      do_pedigree = .FALSE.
-      do_impute = .FALSE.
-      do_geno_out = .TRUE.
     endif
     
     if (.not. with_log .and. .not. do_geno_out) then
