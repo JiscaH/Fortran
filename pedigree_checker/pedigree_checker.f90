@@ -6,8 +6,8 @@
 ! This is an extremely minimalistic version of sequoia, 
 ! useful for finding errors even in very large pedigrees
 
-! compile: gfortran -std=f95 -fall-intrinsics -O3 pedigree_checker.f90 -o PedChecker
-! gfortran -std=f95 -fall-intrinsics -Wall -pedantic -fbounds-check -g -Og pedigree_checker.f90 -o PedChecker
+! compile: gfortran -O3 pedigree_checker.f90 -o PedChecker
+! debug: gfortran -Wall -pedantic -fbounds-check -g -Og pedigree_checker.f90 -o PedChecker
 
 ! ##############################################################################
 ! ##  Global variables  ##
@@ -23,6 +23,27 @@ module global
   double precision, allocatable, dimension(:,:,:,:,:,:) :: LL_trio
   
   contains
+    subroutine print_help()
+        print '(a)',    'Calculate relationship probabilities of candidate parents'
+        print '(a, /)', 'command-line options:'
+        print '(a)',    '  -h, --help          print usage information and exit'
+        print '(a)',    '  --trios <filename>  input file with e.g. pedigree: animal_id, dam_id,',&
+                        '                       sire_id, or animal_id, matGS_id, sire_id;',&
+                        '                       each animal_id may occur multiple times.',&
+                        '                       Default: Pedigree.txt'
+        print '(a)',    '  --pedigreeIN <filename>    same as --trios'             
+        print '(a)',    '  --geno <filename>   input file with genotype data. Default: Geno.txt'       
+        print '(a)',    '  --err               presumed genotyping error rate; default: 0.005'
+        print '(a)',    '  --LLR               do not transform LLRs to probabilities'
+        print '(a)',    '  --noFS              assume pairs cannot be full siblings'
+        print '(a)',    '  --out <filename>    output file with pedigree + OH counts + Likelihoods;',&
+                        '                       default: Pedigree_OUT.txt'
+        print '(a)',    '  --af <filename>     optional input file with allele frequencies. Either',&
+                        '                        1 column and no header, or multiple columns with column',&
+                        '                        MAF, AF, or Frequency. E.g. output from plink --freq.'                       
+        print '(a)',    '  --quiet             suppress all messages'
+    end subroutine print_help 
+    
     subroutine timestamp(spaceIN)
       logical, intent(IN), OPTIONAL :: spaceIN
       logical :: space
@@ -130,7 +151,7 @@ module Probs
   private :: getAF
 
   double precision :: OcA(-1:2,3), OKA2P(-1:2,3,3), AKA2P(3,3,3)
-  double precision, allocatable, dimension(:,:) :: AHWE, OHWE
+  double precision, allocatable :: AF(:), AHWE(:,:), OHWE(:,:)
   double precision, allocatable, dimension(:,:,:) :: AKAP, OKAP
   
   contains
@@ -140,9 +161,10 @@ module Probs
     double precision, intent(IN) :: Er
     character(len=*), intent(IN) :: AF_FileName
     integer :: h,i,j,k,l
-    double precision ::  AF(nSnp), Tmp(3)
+    double precision :: Tmp(3)
 
     ! allele frequencies
+    allocate(AF(nSnp))
     AF = getAF(AF_FileName)
     
 
@@ -249,7 +271,7 @@ module Probs
       enddo
     
     else
-      if (.not. quiet)  print *, "Reading allele frequencies in "//trim(FileName)//" ... "
+      if (.not. quiet)  call printt("Reading allele frequencies in "//trim(FileName)//" ... ")
     
       nCol = FileNumCol(trim(FileName))
       nRow = FileNumRow(trim(FileName))
@@ -446,29 +468,6 @@ program pedigree_checker
   if (.not. quiet)  call printt("")
   if (.not. quiet)  call printt("Done.")
 
-  
-  !=========================
-  contains
-    subroutine print_help()
-        print '(a)',    'Calculate relationship probabilities of candidate parents'
-        print '(a, /)', 'command-line options:'
-        print '(a)',    '  -h, --help          print usage information and exit'
-        print '(a)',    '  --trios <filename>  input file with e.g. pedigree: animal_id, dam_id,',&
-                        '                       sire_id, or animal_id, matGS_id, sire_id;',&
-                        '                       each animal_id may occur multiple times.',&
-                        '                       Default: Pedigree.txt'
-        print '(a)',    '  --pedigreeIN <filename>    same as --trios'             
-        print '(a)',    '  --geno <filename>   input file with genotype data. Default: Geno.txt'       
-        print '(a)',    '  --err               presumed genotyping error rate; default: 0.005'
-        print '(a)',    '  --LLR               do not transform LLRs to probabilities'
-        print '(a)',    '  --noFS              assume pairs cannot be full siblings'
-        print '(a)',    '  --out <filename>    output file with pedigree + OH counts + Likelihoods;',&
-                        '                       default: Pedigree_OUT.txt'
-        print '(a)',    '  --af <filename>     optional input file with allele frequencies. Either',&
-                        '                        1 column and no header, or multiple columns with column',&
-                        '                        MAF, AF, or Frequency. E.g. output from plink --freq.'                       
-        print '(a)',    '  --quiet             suppress all messages'
-    end subroutine print_help 
 
 end program pedigree_checker
 
@@ -609,7 +608,7 @@ subroutine CalcOppHom(OppHomDF)
       call calcOH(Trios(1,i), Trios(k+1,i), OppHomDF(k,i))
     enddo
     if (Trios(2,i)/=0 .and. Trios(3,i)/=0) then
-      call CalcTrioErr(Trios(1,i), Trios(:,i), OppHomDF(3,i))
+      call CalcTrioErr(Trios(1,i), Trios(2:3,i), OppHomDF(3,i))
     endif
   enddo
 
@@ -642,37 +641,31 @@ implicit none
 
 integer, intent(IN) :: A, Par(2)
 integer, intent(OUT) :: ME
-integer :: l, k, Ecnt(3,3,3)   ! offspring - dam - sire
+integer :: l, k, Ecnt(-1:2,-1:2,-1:2)   ! offspring - dam - sire
 
-Ecnt(:,1,1) = (/ 0, 1, 2 /)
-Ecnt(:,1,2) = (/ 0, 0, 1 /)
-Ecnt(:,1,3) = (/ 1, 0, 1 /)
+Ecnt = 0
+Ecnt(0:2,0,0) = (/ 0, 1, 2 /)
+Ecnt(0:2,0,1) = (/ 0, 0, 1 /)
+Ecnt(0:2,0,2) = (/ 1, 0, 1 /)
 
-Ecnt(:,2,1) = (/ 0, 0, 1 /)
-Ecnt(:,2,2) = (/ 0, 0, 0 /)
-Ecnt(:,2,3) = (/ 1, 0, 0 /)
+Ecnt(0:2,1,0) = (/ 0, 0, 1 /)
+Ecnt(0:2,1,1) = (/ 0, 0, 0 /)
+Ecnt(0:2,1,2) = (/ 1, 0, 0 /)
 
-Ecnt(:,3,1) = (/ 1, 0, 1 /)
-Ecnt(:,3,2) = (/ 1, 0, 0 /)
-Ecnt(:,3,3) = (/ 2, 1, 0 /)
+Ecnt(0:2,2,0) = (/ 1, 0, 1 /)
+Ecnt(0:2,2,1) = (/ 1, 0, 0 /)
+Ecnt(0:2,2,2) = (/ 2, 1, 0 /)
+
+Ecnt(0,-1,2) = 1
+Ecnt(0,2,-1) = 1
+Ecnt(2,-1,0) = 1
+Ecnt(2,0,-1) = 1
+
 
 ME = 0
 do l=1,nSnp
-  if (Geno(l,A)==-1 .or. ALL(Geno(l, Par)==-1)) then
-    cycle
-  else if (ANY(Geno(l, Par)==-1)) then
-    do k=1,2
-      if (Geno(l, Par(k))==-1) then
-        if (((Geno(l,A)==0).and.(Geno(l,Par(3-k))==2)) .or. &
-         ((Geno(l,A)==2).and.(Geno(l,Par(3-k))==0))) then
-          ME = ME +1
-          cycle
-        endif
-      endif
-    enddo
-  else
-    ME = ME + Ecnt(Geno(l,A)+1, Geno(l, Par(1))+1, Geno(l, Par(2))+1)
-  endif
+  if (Geno(l,A)==-1 .or. ALL(Geno(l, Par)==-1)) cycle
+  ME = ME + Ecnt(Geno(l,A), Geno(l, Par(1)), Geno(l, Par(2)))
 enddo
 
 end subroutine CalcTrioErr
@@ -698,10 +691,11 @@ subroutine Precalc_trioLLs
   double precision :: Tmp(3), Tmp2(3,3), Tmp3(3,3,3)
 
   allocate(LL_trio(-1:2,3,3, nSnp, nRel,nRel))  ! G_Off, G_dam, G_sire, snp, rel_1, rel_2 (PO/GP/HA/U)
-  LL_trio = Missing
+  LL_trio = 1D0
 
 
   do l = 1, nSnp
+    if (AF(l) < TINY(0D0) .or. AF(l) > (1d0 - TINY(0D0)))  cycle   ! monomorphic SNP
     do x=-1,2  ! observed genotype offspring
       do y=1,3    ! actual genotype parent 1
         do z=1,3    ! actual genotype parent 2

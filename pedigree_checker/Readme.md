@@ -1,5 +1,4 @@
-# Manual for `pedigree_checker.f90`
-### A fortran program to check consistency between pedigree and SNP data
+
 
 ## Description
 
@@ -14,14 +13,27 @@ pedigree the probability that either or both parents are
 
 returning all 5x5=25 probabilities for each trio.
 
-In fact, ‘pedigree’ is extremely loosely defined: it may contain any
- arbitrary list of trios, such as offspring - sire -
-maternal grandparent. Each individual may occur multiple times in the
+In fact, ‘pedigree’ is here extremely loosely defined: the pedigree file
+may contain any arbitrary list of trios, such as offspring - sire -
+maternal grandsire. Each individual may occur multiple times in the
 offspring column, e.g. with different candidate parents.
 
 Pairs can be included too, as trios where one parent is missing (‘NA’);
 probabilities are only calculated for this parent being unrelated (UU).
 Non-genotyped parents are treated the same as missing parents.
+
+NOTE: for pairs, it cannot tell you which of the two is the parent, and
+which the offspring.
+
+
+
+## Pair_checker
+
+This program is highly similar, but also considers the option for the
+samples to be from the same individual (duplicates). As the name
+implies, it only works for sample pairs. As it is simpler, it can be
+faster on very large datasets.
+
 
 
 ## Assumptions and simplifications
@@ -34,8 +46,14 @@ Non-genotyped parents are treated the same as missing parents.
 - All SNPs are independent, have the same (average) genotyping error
   rate, and genotype frequencies are in Hardy-Weinberg equilibrium.
 
-For more sophisticated treatment of relative pairs, please see `sequoia`
-(<https://jiscah.github.io/>).
+### sequoia
+
+For more sophisticated approach, please see `sequoia`
+(<https://jiscah.github.io/>) function `CalcOHLLR()` (R) or option
+`--ped` (standalone). Its input is restricted to valid pedigrees, but it
+does consider potential inbreeding of both the focal individual and the
+candidate parents.
+
 
 
 ## Requirements & preparation
@@ -55,6 +73,7 @@ a faster program. The choice of program name (after `-o`) is completely
 free.
 
 
+
 ## Input
 
 ### SNP data
@@ -62,7 +81,9 @@ free.
 The genotype filename and location is specified with `--geno`.
 
 To convert genotype data from standard PLINK format to the format for
-`sequoia` and `pedigree_checker`, use
+`pedigree_checker`, use `format_geno`
+(<https://github.com/JiscaH/Fortran/tree/main/format_geno>) or the
+following bash script:
 
 ``` bash
 plink --bfile genoFile --recode A --out genoFile
@@ -79,14 +100,6 @@ which
 - drops columns 2–6 (family ID, sex, phenotype, etc)
 - drops header row
 - replaces missing value code NA by -9
-
-This is implemented in `format_SNP_data_for_sequoia.sh`:
-
-``` bash
-./format_SNP_data_for_sequoia.sh genoFile
-```
-
-which is also available at <https://github.com/JiscaH/sequoiaExtra> .
 
 ### Pedigree / trios
 
@@ -107,23 +120,35 @@ subset of a larger population. If none is provided, allele frequencies
 are calculated from the genotype data.
 
 
+
 ## Execute
 
 ``` bash
-./PedChecker --geno genoFile.txt --pedigreeIN MyPedigree.txt \
-  --err 0.005 --out PedOUT_test.txt
+./PedChecker --trios example_trios.txt --geno example_genotypes.txt --err 0.01
 ```
 
 Here `--err` is the presumed genotyping error rate. This must be
-strictly positive, to avoid divisions by zero.
+strictly positive, to avoid divisions by zero. An overview of the
+commands can be found with `./PedChecker --help`.
 
-An overview of the commands can be found with `./PedChecker --help`.
+### `Err`
+
+This parameter can have a considerable effect. Imagine a true
+parent-offspring pair with a few genotyping errors: if `Err` is set very
+low, they will have a low probability to be parent-offspring, and a
+higher probability to be full siblings or second degree relatives. If
+`Err` is set higher, the calculated probability to be parent-offspring
+will also be higher (but not as high as for a pair without any
+genotyping errors). If `Err` is set very high, the different
+relationships will start to blend together and are more difficult to
+distinguish.
+
 
 
 ## Output
 
 The output consists of the the trios in the pedigree file, with 3+25 (or
-16 with `--noFS`) added columns:
+3+16 when `--noFS`) added columns:
 
 - OH\_\<parent1\>, OH\_\<parent2\>: the count of opposing homozygous
   SNPs between the focal (offspring) individual and <parent1>, and
@@ -147,30 +172,36 @@ The output consists of the the trios in the pedigree file, with 3+25 (or
   - HA = half avuncular or other 3rd degree relationship
   - UU = unrelated.
 
+The calculation of the probabilities is described further on in this
+document.
+
 With option `--LLR` log10-likelihoods (LL) are returned instead of
 probabilities, scaled for each trio by the LL that both parents are
-Unrelated, i.e. results are not scaled by $P(R)$.
+Unrelated.
+
 
 
 ## Post-processing in R
 
-A logical next step is to determine for each trio the relationship
-combination with the highest probability, and/or for each ‘parent’ the
-most likely relationship to the focal individual. For this the R
-function `pedChecker_topRel` is available, which can be accessed in R
-using
+One possible approach is to include for each individual many different
+combinations of candidate parents. A logical next step is to determine
+for each trio the relationship combination with the highest probability,
+and/or for each ‘parent’ the most likely relationship to the focal
+individual. For this the R function `pedChecker_topRel` is available,
+which can be accessed in R using
 
 ``` r
-source('https://raw.githubusercontent.com/JiscaH/sequoiaExtra/main/pedigree_checker/pedChecker_toprel.R')
+source('https://raw.githubusercontent.com/JiscaH/Fortran/main/pedigree_checker/pedChecker_toprel.R')
 ```
 
-(To get the URL: from <https://github.com/JiscaH/sequoiaExtra> browse to
-the R file, then click ‘raw’)
+(To get the URL: from <https://github.com/JiscaH/Fortran/> browse to the
+R file, then click ‘raw’)
 
 Some help is included at the top of this R file.
 
 Note that `pair_TopRel` may occasionally appear inconsistent with
-`dam_TopRel`. For example, a trio may have the following probabilities:
+`dam_TopRel` or `sire_TopRel`. For example, a trio may have the
+following probabilities:
 
 ``` r
 #     sire
@@ -182,8 +213,11 @@ Note that `pair_TopRel` may occasionally appear inconsistent with
 #   UU 0.000 0.000  0  0  0
 ```
 
-Then `pair_TopRel` = HA_PO, but `dam_TopRel` = GP (0.275+0.304 \>
-0.416).
+Then the most likely relationship combination for the candidate parent
+pair is 3rd degree relative + parent (`pair_TopRel` = HA_PO), but the
+most likely relationship for the candidate dam is 2nd degree relative
+(`dam_TopRel` = GP (0.275+0.304 \> 0.416)).
+
 
 
 ## Calculations
@@ -216,10 +250,11 @@ improve the estimate of the actual genotype.
 ### Scaling
 
 Following Bayes’ theorem, the probability of a relationship $R$ given
-the genetic data $G$ can be calculated from the probability of $G$ given
-$R$ as
+the genetic data $G$ can be calculated as
 
-$P(R|G) = \frac{P(G|R)}{P(G)}P(R)$ where $P(G)$ is the probability
+$ P(R|G) = \frac{P(G|R)}{P(G)}P(R) $ 
+
+Where $P(G)$ is the probability
 of observing the data ignoring any relationships, which for simplicity
 can be approximated by the probability if both parents where unrelated,
 $P(G) \approx P(G|UU)$.
@@ -249,9 +284,11 @@ for each sample pair the likelihoods at each SNP can be very efficiently
 looked up, and then the sum of the logarithm calculated.
 
 
+
 ## Disclaimer
 
 While every effort has been made to ensure that this program provides
 what it claims to do, there is absolutely no guarantee that the results
 provided are correct. Use is entirely at your own risk.
+
 
