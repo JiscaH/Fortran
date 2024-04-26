@@ -98,7 +98,7 @@ directly from the genotype data, and not calculated from the allele
 frequencies. Providing a file with population allele frequencies
 (`--af`) therefore has no effect.
 
-<img src="imputator_manual_files/figure-markdown_github/unnamed-chunk-1-1.png" width="60%" />
+<img src="README_figs/common_genotype.png" width="60%" />
 
 ------------------------------------------------------------------------
 
@@ -218,7 +218,7 @@ unknown and $q=\frac{1}{3}$ (see plot): then
 *P*(heterozygote
 $)=2\times\frac{1}{3}\times\frac{2}{3} = \frac{4}{9} \approx 0.44$.
 
-<img src="imputator_manual_files/figure-markdown_github/unnamed-chunk-5-1.png" width="50%" />
+<img src="README_figs/max_geno_prob.png" width="50%" />
 
 <table class=" lightable-paper" style="color: black; font-family: &quot;Arial Narrow&quot;, arial, helvetica, sans-serif; ">
 <caption>
@@ -549,7 +549,7 @@ It is possible to only impute cases where it is fairly certain what the
 genotype should be, and leave the rest missing (NA). This can be done
 with the threshold `T_impute`.
 
-<img src="imputator_manual_files/figure-markdown_github/unnamed-chunk-8-1.png" width="60%" />
+<img src="README_figs/impu_thresholds.png" width="60%" />
 
 ### `--when-in-doubt`
 
