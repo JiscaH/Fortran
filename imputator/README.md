@@ -20,8 +20,9 @@ information from linked SNPs see e.g. Beagle or AlphaImpute.
 -   run the program: `./imputator --geno <filename>`. For an overview of
     the options, run `./imputator --help`.
 
-> [!CAUTION] 
+> [!CAUTION]  
 > This program is under development and not extensively tested yet. Use is entirely at your own risk.
+
 
 ## Methods overview
 
@@ -90,26 +91,34 @@ not allowed, IDs in separate file.
 
 ------------------------------------------------------------------------
 
-# Method `parent`
+# Method `common`
+
+The genotype frequencies for this method are (currently) counted
+directly from the genotype data, and not calculated from the allele
+frequencies. Providing a file with population allele frequencies
+(`--af`) therefore has no effect.
+
+<img src="imputator_manual_files/figure-markdown_github/unnamed-chunk-1-1.png" width="60%" />
+
+------------------------------------------------------------------------
+
+# Method `parents` & `ancestors`
 
 The tables show the imputed values for method=‘parents’. The imputed
-values with methods ‘ancestors’ will often be the same.
+values with methods ‘ancestors’ will be the same when the parent is
+genotyped at the locus, except if the parent and grandparent genotype
+show a Mendelian inconsistency (i.e. if one or the other must be a
+genotyping error).
 
 Genotypes are coded as 0, 1 or 2 copies of the reference (minor) allele.
 
 ### Both parents genotyped
 
 When both parents are genotyped and homozygous, the to be imputed
-genotype is obvious (ignoring genotyping errors).
+genotype follows directly from the laws of Mendelian inheritance
+(ignoring genotyping errors).
 
-When one parent is homozygous and the other heterozygous, there is a
-50/50 chance for the offspring to be heterozygous or an identical
-homozygote. By default, the offspring is always imputed as heterozygous.
-This can be changed with `--when-in-doubt` to the appropriate homozygote
-(`hom`) or the most common genotype at the SNP (`com`, which may be the
-‘other’ homozygote).
-
-<table class=" lightable-paper" style="font-family: &quot;Arial Narrow&quot;, arial, helvetica, sans-serif; width: auto !important; margin-left: auto; margin-right: auto;">
+<table class=" lightable-paper" style="color: black; font-family: &quot;Arial Narrow&quot;, arial, helvetica, sans-serif; width: auto !important; margin-left: auto; margin-right: auto;">
 <thead>
 <tr>
 <th style="padding-bottom:0; padding-left:3px;padding-right:3px;text-align: center; " colspan="1">
@@ -146,7 +155,7 @@ sire
 0
 </td>
 <td style="text-align:left;">
-\*
+*
 </td>
 <td style="text-align:left;">
 2
@@ -157,13 +166,13 @@ sire
 1
 </td>
 <td style="text-align:left;">
-\*
+*
 </td>
 <td style="text-align:left;">
 1
 </td>
 <td style="text-align:left;">
-\*
+*
 </td>
 </tr>
 <tr>
@@ -174,7 +183,7 @@ sire
 2
 </td>
 <td style="text-align:left;">
-\*
+*
 </td>
 <td style="text-align:left;">
 0
@@ -183,28 +192,39 @@ sire
 </tbody>
 </table>
 
-\*: value depends on `--when-in-doubt`, which defaults to `'het'`
-(heterozygote, 1 allele copy).
+When one parent is homozygous and the other heterozygous (marked with *
+in the table), there is a 50/50 chance for the offspring to be
+heterozygous or an identical homozygote. By default, the offspring is
+always imputed as heterozygous. This can be changed with
+`--when-in-doubt` to the appropriate homozygote (`hom`) or the most
+common genotype at the SNP (`com`, which may be the ‘other’ homozygote).
 
 ### 0 or 1 parent(s) genotyped
 
 When one or both parents are not genotyped at the SNP, the allele(s) are
 assumed to be a random draw from a population in Hardy-Weinberg
 Equilibrium. Consequently, genotypes at a SNP with a low minor allele
-frequency (MAF) are imputed with a higher accuracy.
+frequency (MAF) are imputed with a higher accuracy (if 99% of the
+alleles in the population are of the same type, you’re 99% sure it’ll
+get that allele).
 
 When one parent is heterozygous and the other parent’s genotype is
 unknown, the offspring always has a 50% chance to be heterozygous,
 irrespective of the population allele frequency *q*
-($\frac{1}{2}\times q + \frac{1}{2}\times(1-q)$).
+($\frac{1}{2}\times q + \frac{1}{2}\times(1-q) = \frac{1}{2}$).
 
-When both parental genotypes are unknown, the greatest uncertainty is
-when $q=\frac{1}{3}$: then P(heterozygote) =
-$2\times\frac{1}{3}\times\frac{2}{3} = \frac{4}{9} \approx 0.44$.
+The greatest imputation uncertainty is when both parental genotypes are
+unknown and $q=\frac{1}{3}$ (see plot): then  
+*P*(heterozygote
+$)=2\times\frac{1}{3}\times\frac{2}{3} = \frac{4}{9} \approx 0.44$.
 
-<img src="README_figs/max_geno_prob.png" width="70%" />
+<img src="imputator_manual_files/figure-markdown_github/unnamed-chunk-5-1.png" width="50%" />
 
-<table class=" lightable-paper" style="font-family: &quot;Arial Narrow&quot;, arial, helvetica, sans-serif; width: auto !important; ">
+<table class=" lightable-paper" style="color: black; font-family: &quot;Arial Narrow&quot;, arial, helvetica, sans-serif; ">
+<caption>
+Imputed genotype if (at most) only dam genotype is known, for a range of
+allele frequencies AF
+</caption>
 <thead>
 <tr>
 <th style="padding-bottom:0; padding-left:3px;padding-right:3px;text-align: center; " colspan="1">
@@ -214,12 +234,7 @@ AF
 </th>
 <th style="padding-bottom:0; padding-left:3px;padding-right:3px;text-align: center; " colspan="4">
 
-sire
-
-</th>
-<th style="padding-bottom:0; padding-left:3px;padding-right:3px;text-align: center; " colspan="1">
-
-most<br>common
+dam
 
 </th>
 </tr>
@@ -238,8 +253,6 @@ most<br>common
 <th style="text-align:center;">
 ?
 </th>
-<th style="text-align:center;">
-</th>
 </tr>
 </thead>
 <tbody>
@@ -255,9 +268,6 @@ most<br>common
 </td>
 <td style="text-align:center;">
 1
-</td>
-<td style="text-align:center;">
-0
 </td>
 <td style="text-align:center;">
 0
@@ -279,9 +289,6 @@ most<br>common
 <td style="text-align:center;">
 0
 </td>
-<td style="text-align:center;">
-0
-</td>
 </tr>
 <tr>
 <td style="text-align:left;font-weight: bold;border-right:1px solid;">
@@ -295,9 +302,6 @@ most<br>common
 </td>
 <td style="text-align:center;">
 1
-</td>
-<td style="text-align:center;">
-0
 </td>
 <td style="text-align:center;">
 0
@@ -319,9 +323,6 @@ most<br>common
 <td style="text-align:center;">
 0
 </td>
-<td style="text-align:center;">
-0
-</td>
 </tr>
 <tr>
 <td style="text-align:left;font-weight: bold;border-right:1px solid;">
@@ -329,9 +330,6 @@ most<br>common
 </td>
 <td style="text-align:center;">
 0
-</td>
-<td style="text-align:center;">
-1
 </td>
 <td style="text-align:center;">
 1
@@ -359,25 +357,19 @@ most<br>common
 <td style="text-align:center;">
 1
 </td>
-<td style="text-align:center;">
-1
-</td>
 </tr>
 <tr>
 <td style="text-align:left;font-weight: bold;border-right:1px solid;">
 0.5
 </td>
 <td style="text-align:center;">
-\*
+*
 </td>
 <td style="text-align:center;">
 1
 </td>
 <td style="text-align:center;">
-\*
-</td>
-<td style="text-align:center;">
-1
+*
 </td>
 <td style="text-align:center;">
 1
@@ -399,9 +391,6 @@ most<br>common
 <td style="text-align:center;">
 1
 </td>
-<td style="text-align:center;">
-1
-</td>
 </tr>
 <tr>
 <td style="text-align:left;font-weight: bold;border-right:1px solid;">
@@ -412,9 +401,6 @@ most<br>common
 </td>
 <td style="text-align:center;">
 1
-</td>
-<td style="text-align:center;">
-2
 </td>
 <td style="text-align:center;">
 2
@@ -439,9 +425,6 @@ most<br>common
 <td style="text-align:center;">
 2
 </td>
-<td style="text-align:center;">
-2
-</td>
 </tr>
 </tbody>
 </table>
@@ -452,8 +435,7 @@ most<br>common
 
 For each SNP and each individual, the probabilities that there are in
 truth 0, 1, or 2 copies of the minor allele are estimated using the
-method described in Kerr & Kinghorn, J. Anim. Breed. Genet., 1996
-(<https://www.researchgate.net/profile/Richard-Kerr-7/publication/229737009_An_efficient_algorithm_for_segregation_analysis_in_large_populations/links/5a7a2e7c0f7e9b41dbd614f0/An-efficient-algorithm-for-segregation-analysis-in-large-populations.pdf>)
+method described in [Kerr & Kinghorn, J. Anim. Breed. Genet., 1996](<https://www.researchgate.net/profile/Richard-Kerr-7/publication/229737009_An_efficient_algorithm_for_segregation_analysis_in_large_populations/links/5a7a2e7c0f7e9b41dbd614f0/An-efficient-algorithm-for-segregation-analysis-in-large-populations.pdf>)
 
 This probability depends on an individuals own genotype, the genotypes
 of its parents and full siblings and their mates (‘anterior
@@ -521,6 +503,12 @@ further testing and optimising is needed).
 The iterative peeling step is done before the genotype cleaning step,
 and again between the genotype cleaning step and the imputation step.
 
+> [!NOTE]  
+> Genotyping cleaning is only available with `method=full`;
+with the other methods it is impossible to pinpoint whether a Mendelian
+inconsistency is due to a genotyping error in the parent or in the
+offspring.
+
 ------------------------------------------------------------------------
 
 # Options
@@ -561,24 +549,25 @@ It is possible to only impute cases where it is fairly certain what the
 genotype should be, and leave the rest missing (NA). This can be done
 with the threshold `T_impute`.
 
-<img src="README_figs/impu_thresholds.png" width="70%" />
+<img src="imputator_manual_files/figure-markdown_github/unnamed-chunk-8-1.png" width="60%" />
 
 ### `--when-in-doubt`
 
 When two genotypes are nearly equally likely, it is by default imputed
-always as heterozygote. This can be changed to the most common genotype
-at the SNP (`com`) or the most-likely homozygote for the individual
-(`hom`).
+always as heterozygote (`het`). This can be changed to the most common
+genotype at the SNP (`com`) or the most-likely homozygote for the
+individual (`hom`).
 
 ‘Nearly equally likely’ is currently defined as two genotypes having
-probability  \> 0.49, but should and will be made dependent on the
-presumed genotyping error rate `err`.
+probability  \> 0.49, but will be made dependent on the presumed
+genotyping error rate `err`.
 
 ### `--err`, `--errV`
 
 Presumed genotyping error rate. Either as a single value (`--err`) or as
 3 values which give P(observed\|actual) for hom\|other hom, het\|hom,
-and hom\|het. See ?sequoia::ErrToM in R for details.
+and hom\|het. See [R package sequoia function
+ErrToM](https://jiscah.github.io/reference/ErrToM.html) for details.
 
 ### `--af`
 
@@ -617,15 +606,29 @@ genotype file.
 ## snpclean + imputation log
 
 By default a log file is created with a record for each edit made to the
-genotype data, irrespective of the imputation method chosen.
+genotype data, irrespective of the imputation method chosen. Column
+names are : ‘snp_index’, ‘snp_name’, ‘threshold’, ‘id_index’, ‘id_name’,
+‘g_in’, ‘g_out’, ‘prob_0’, ‘prob_1’, ‘prob_2’. Here ‘index’ refers to
+the column number (snp_index) / row number (id_index) in the genotype
+file. g_in and g_out are the genotypes in the genotypes in the input and
+output genotype file, coded as 0/1/2 and -1 for missing values.
 
-Column names are : ‘snp_index’, ‘snp_name’, ‘threshold’, ‘id_index’,
-‘id_name’, ‘g_in’, ‘g_out’, ‘prob_0’, ‘prob_1’, ‘prob_2’. Here ‘index’
-refers to the column number / row number in the genotype file, it is 0
-for completely non-genotyped individuals in the pedigree (when
-`--impute-all`). g_in and g_out are the genotypes in the genotypes in
-the input and output genotype file, coded as 0/1/2 and -1 for missing
-values.
+prob\_<g> is the genotype probability for the individual to have
+genotype <g> (0, 1 or 2) at the SNP. This probability differs between
+the methods as follows (detailed descriptions earlier in this document):
+
+-   `het` & `common`: genotype probabilities under Hardy Weinberg
+    Equilibrium (HWE)
+-   `parents` : based on parental genotypes only, using Mendelian
+    inheritance laws. If the genotype of one or both parents is unknown,
+    genotype probabilities under HWE.
+-   `ancestors` : based on ancestral genotypes; e.g. considers
+    grandparental genotypes if parent is not genotyped.
+-   `full` : uses info from all relatives.
+
+For `method=full` there are 6 additional columns, with the anterior
+(‘ant\_<g>’) and posterior (‘post\_<g>’) probabilities, based on
+respectively ancestors + full siblings and on mates + progeny.
 
 Note that if a genotype was first set to missing by `snpclean`, and then
 imputed by `impute`, there will be 2 entries in the log.
@@ -634,6 +637,11 @@ The filename for this log can be specified with `--edits-out`. The log
 can also be turned off with `--no-edits-out`, which gives a slight speed
 increase - which is neglible with `method=full`, but can be relatively
 large for the faster methods.
+
+> [!TIP]  
+> The edits log can later be combined with the original genotype file to
+an imputed genotype file, without having to run the imputation again.
+This can be done with `--edits-in`.
 
 # Algorithm details
 
