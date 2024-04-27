@@ -17,7 +17,7 @@ module global_variables
   use sqa_fileIO, ONLY: ishort, nchar_ID
   implicit none
 
-  character(len=*), parameter :: version = "0.3.6 (19 April 2024)"
+  character(len=*), parameter :: version = "0.3.7 (27 April 2024)"
   integer, parameter :: chunk_size_large = 100, chunk_size_small=10
   integer :: nIndG, nInd_max, nIndT, nSnp, nMatings, nMat_max
   integer(kind=ishort), allocatable :: Geno(:,:)
@@ -160,6 +160,7 @@ contains
   !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   subroutine read_pedigree(FileName, incl_non_genotyped) 
     use sqa_fileIO, ONLY: checkFile, IOstat_handler, FileNumRow
+    use impute_fun, ONLY: do_impute_all
     
     character(len=*), intent(IN) :: FileName
     logical, intent(IN) :: incl_non_genotyped
@@ -182,15 +183,22 @@ contains
     ! add parents of genotyped individuals only + grandparents (= parents of those added in R1)
     nInd_R = nIndG
     do r=1,2   !r=3 takes forever? 
-      if (.not. incl_non_genotyped .and. r>1)  exit
+      if (r>1 .and. ((.not. incl_non_genotyped) .or. do_impute_all))  exit  ! none skipped w do_impute_all
       do x=1,nIndP
         i = get_index(names_pedigree(1,x))
-        if (i <= 0 .or. i>nInd_R(r))  cycle  ! not genotyped (R1) / not parent-of-genotyped (R2)
+        if (i <= 0 .or. i>nInd_R(r)) then   ! not genotyped (R1) / not parent-of-genotyped (R2)
+          if (do_impute_all) then
+            call pop_add(individual(index=nIndT+1, ID=names_pedigree(1,x), sex=3))
+            i = nIndT
+          else
+            cycle 
+          endif
+        endif
         do k=1,2
           par_i = get_index(names_pedigree(1+k,x))
           if (par_i == 0)  cycle
           if (par_i == no_index) then
-            if (.not. incl_non_genotyped)  cycle
+            if (.not. (incl_non_genotyped .or. do_impute_all))  cycle
             call pop_add(individual(index=nIndT+1, ID=names_pedigree(1+k,x), sex=k))
             par_i = nIndT
           endif
@@ -230,11 +238,10 @@ contains
             get_index = i
             return
           endif
-        enddo
-          
-      else
-        return
+        enddo 
         
+      else
+        return       
       endif
       
     end function get_index
@@ -824,7 +831,6 @@ module impute_fun
   ! if two genotypes have prob > doubt_threshold, impute as --when-in-doubt
   integer, parameter, private :: unit_log = 4   ! unit to which logfile is written
   double precision, allocatable :: Gprob(:,:), Gprob_prev(:,:)
-  integer :: N
   ! for prob_ant_post
   integer(kind=ishort), allocatable :: Gl(:)   ! genotypes at SNP l
   double precision, allocatable :: lp_ant(:,:), lp_post(:,:,:)  ! log-probabilities
@@ -873,11 +879,7 @@ contains
       endif         
     endif
     
-    if (do_impute_all) then
-      N = nIndT
-    else
-      N = nIndG
-    endif 
+    if (do_impute_all)  call grow_geno()  ! add empty rows to genotype matrix for non-genotyped individuals
     
     if (method=='ancestors' .or. method=='full') then
       if (.not. quiet)  call printt('getting generation numbers ... ')
@@ -889,8 +891,7 @@ contains
     do l=1, nSnp 
       if (.not. quiet .and. mod(l,500)==0) call printt(text='l=', int=l)  ! write(*,'(i5, 2x)', advance='no') l
       ! only first iteration, if looping over several thresholds:
-      Gl = -1
-      Gl(0:nIndG) = Geno(:,l) 
+      Gl = Geno(:,l) 
       Gprob = 0D0
       
       if (method=='common' .or. method=='hom' .or. method=='het')  call set_gprob_to_gfreq(l)
@@ -913,7 +914,7 @@ contains
       
       ! impute
       if (do_impute)  call impute_snp(l, Threshold_impute)
-      if (do_geno_out)  Geno(:,l) = Gl(0:nIndG)
+      if (do_geno_out)  Geno(:,l) = Gl
       
     enddo
     if (do_probs_out)  close(3)
@@ -989,6 +990,27 @@ contains
       enddo
       
     end subroutine set_gprob_to_gfreq
+        
+    !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    ! if do_impute_all, add non-genotyped individuals to genotype matrix
+    !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    subroutine grow_geno()
+      integer(kind=ishort), allocatable :: Geno_tmp(:,:)
+      character(len=nchar_ID), allocatable :: IdV_tmp(:)
+      
+      if (nIndT == nIndG)  return  ! no non-genotyped individuals
+      
+      allocate(Geno_tmp(0:nIndT,1:nSnp))
+      Geno_tmp = -1
+      Geno_tmp(0:nIndG,:) = Geno
+      call move_alloc(Geno_tmp, Geno)  ! from, to
+      allocate(IdV_tmp(nIndT))
+      IdV_tmp = pop(1:nIndT)%ID
+      call move_alloc(IdV_tmp, IdV)      
+      nIndG = nIndT
+
+    end subroutine grow_geno
+    
 
   end subroutine clean_n_impute
   
@@ -1001,7 +1023,7 @@ contains
     integer :: i
   
     call mk_AKO2P(l)
-    do i=1, N
+    do i=1, nIndG
       if (Gl(i)/=-1)  cycle  ! skip if not missing
       Gprob(:,i) = lAKO2P(:, Gl(ped_array(1,i)), Gl(ped_array(2,i)) )
     enddo
@@ -1086,7 +1108,7 @@ contains
       g_common = MAXLOC( G_freq(l), DIM=1, KIND=ishort) -1_ishort
     endif
     
-    do i=1,N
+    do i=1,nIndG
       if (Gl(i) /= -1)  cycle
       if (ALL(Gprob(:,i) < log(Threshold)))  cycle
       if (COUNT(Gprob(:,i) >= doubt_threshold) > 1 .or. method=='hom' .or. method=='het') then    
@@ -1193,7 +1215,7 @@ contains
       lp_ant(:,i) = quick_p_ant(i)
     enddo
     
-    do i=1,N
+    do i=1,nIndG
       if (Gl(i)/=-1)  cycle
       Gprob(:,i) = calc_g_prob(i)
     enddo
@@ -1484,7 +1506,7 @@ program main
   if (.not. quiet)  call print_sumstats('IN') 
  
   mk_pedigree_object = (method=='ancestors' .or. method=='full')
-  if (do_pedigree) then
+  if (do_pedigree .or. do_impute_all) then
     if (.not. quiet)  call printt('reading pedigree file ...')
     call read_pedigree(PedigreeFile, mk_pedigree_object)
     if (.not. quiet) print *, 'Total # individuals: ', nIndT
@@ -1593,7 +1615,7 @@ contains
               stop
             endif
             
-          case ('--pedigree')  
+          case ('--pedigree', '--ped')  
             i = i+1
             call get_command_argument(i, PedigreeFile)
             

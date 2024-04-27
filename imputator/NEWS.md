@@ -1,3 +1,15 @@
+## 0.3.7  2024-04-27
+- fix --impute-all : imputions for non-genotyped individuals were written to edits
+file but not to output genotype. Now added to bottom of genotype file. 
+- updated manual
+
+
+## 0.3.6  2024-04-19
+- fix --edits-in: was ignored due to conflict with default options (for do_snpclean)
+- fix edits output file: ant_<g> & probs_<g> columns only when method='full';
+set prob_<g> to population genotype frequencies for methods het & common
+
+
 ## 0.3.5  2024-04-08
 - add 'method' input parameter, with new method 'parent' ('ancestors' = --quick)
 - speed increase for methods ancestors and parents

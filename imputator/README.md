@@ -2,7 +2,9 @@
 
 This program imputes (fills in) missing SNP genotype data using a
 pedigree. Neither the pedigree nor the SNP data is assumed to be
-error-free.
+error-free. It is primarily intended to complete the genotype of
+partly-genotyped individuals, but can also impute non-genotyped
+individuals.                                               
 
 Each SNP is treated completely independently; for programs that use
 information from linked SNPs see e.g. Beagle or AlphaImpute.
@@ -583,6 +585,8 @@ the exact same order as in the genotype data, SNP names are not checked.
 By default only ‘incidentally missing values’ are imputed, i.e. values
 in individuals which are included in the genotype file. With
 `--impute-all` all individuals in the pedigree file will be imputed.
+They are added to the bottom of the genotype file, in the order in which
+they are encountered in the pedigree.                                     
 
 ### `--tol`
 
@@ -590,7 +594,7 @@ Used by `--method full` only; the iterative peeling is deemed to have
 converged when all genotype probabilities after the current iteration
 differ by less than `--tol` from those after the previous iteration.
 
-## `--edits-in`
+### `--edits-in`
 
 The log file contains all information to perform the imputation. It can
 be convenient to first run the algorithm with `--no-geno-out`, e.g. to
@@ -603,6 +607,8 @@ file into N chunks, do the calculations on each chunk in parallel,
 combine the logfiles, and apply the full list of edits to the original
 genotype file.
 
+> [!NOTE]  
+> Not yet compatible with `--impute-all`.
 ## snpclean + imputation log
 
 By default a log file is created with a record for each edit made to the
