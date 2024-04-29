@@ -17,7 +17,7 @@ module global_variables
   use sqa_fileIO, ONLY: ishort, nchar_ID
   implicit none
 
-  character(len=*), parameter :: version = "0.3.7 (27 April 2024)"
+  character(len=*), parameter :: version = "0.3.7.1 (29 April 2024)"
   integer, parameter :: chunk_size_large = 100, chunk_size_small=10
   integer :: nIndG, nInd_max, nIndT, nSnp, nMatings, nMat_max
   integer(kind=ishort), allocatable :: Geno(:,:)
@@ -158,12 +158,11 @@ contains
   !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   ! read pedigree from file & init parent array
   !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-  subroutine read_pedigree(FileName, incl_non_genotyped) 
+  subroutine read_pedigree(FileName, incl_non_genotyped, do_impute_all) 
     use sqa_fileIO, ONLY: checkFile, IOstat_handler, FileNumRow
-    use impute_fun, ONLY: do_impute_all
     
     character(len=*), intent(IN) :: FileName
-    logical, intent(IN) :: incl_non_genotyped
+    logical, intent(IN) :: incl_non_genotyped, do_impute_all
     integer :: i,x,k, ios, nIndP, par_i, r, nInd_R(3)
     integer, parameter :: no_index=-999
     character(len=nchar_ID), allocatable :: names_pedigree(:,:)   
@@ -1508,7 +1507,7 @@ program main
   mk_pedigree_object = (method=='ancestors' .or. method=='full')
   if (do_pedigree .or. do_impute_all) then
     if (.not. quiet)  call printt('reading pedigree file ...')
-    call read_pedigree(PedigreeFile, mk_pedigree_object)
+    call read_pedigree(PedigreeFile, mk_pedigree_object, do_impute_all)
     if (.not. quiet) print *, 'Total # individuals: ', nIndT
   endif
   if (mk_pedigree_object)  call init_pedigree()  
