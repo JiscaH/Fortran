@@ -17,8 +17,8 @@ module global_variables
   use sqa_fileIO, ONLY: ishort, nchar_ID
   implicit none
 
-  character(len=*), parameter :: version = "0.3.7.1 (29 April 2024)"
-  integer, parameter :: chunk_size_large = 100, chunk_size_small=10
+  character(len=*), parameter :: version = "Version 0.3.7.2 (03 May 2024)"
+  integer, parameter :: chunk_size_large = 100, chunk_size_small=10, nchar_filename=200
   integer :: nIndG, nInd_max, nIndT, nSnp, nMatings, nMat_max
   integer(kind=ishort), allocatable :: Geno(:,:)
   integer, allocatable :: indiv2mating(:)
@@ -1057,7 +1057,7 @@ contains
   
   
   !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-  ! genotype frequencies at SNP l
+  ! genotype frequencies at SNP l (non-missing)
   !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   pure function G_freq(l)
     integer, intent(IN) :: l
@@ -1067,6 +1067,7 @@ contains
     do x=0,2
       G_freq(x) = COUNT(Geno(1:nIndG,l)==x)/dble(nIndG)
     enddo
+    G_freq = G_freq/SUM(G_freq)  ! scale to sum to 1, in case of missingness
 
   end function G_freq
   
@@ -1163,44 +1164,28 @@ contains
        
     do r=1,r_max
       Gprob_prev = Gprob
-      
-!       call timestamp2()
-!      print *, 'go'                
+              
       ! peel down
       do x=1,nIndT
         i = Gen_rank_down(x)
         lp_ant(:,i) = calc_p_ant(i)
       enddo  
-      
-!      call timestamp2()
- !    print *, r, 'lp_ant :', SUM(lp_ant)                 
+               
       ! peel up
       do x=1,nMatings
         m = Gen_rank_up(x)
         lp_post(:,:,m) = calc_p_post(m)
       enddo 
-      
-!       call timestamp2()
-  !    print *, r, 'lp_post :', SUM(lp_post)                                    
+                                 
       ! calc genotype probabilities
       do i=1,nIndT
         Gprob(:,i) = calc_g_prob(i)
       enddo
  
       ! check for convergence
-  !    write(*,'(i4, "  total abs diff: ", f15.5)') r, SUM(abs(Gprob - Gprob_prev))
- !     print *, ''
       if (all(abs(Gprob - Gprob_prev) < tol))  exit
     enddo
-    
-   ! contains
-    ! subroutine timestamp2()
-      ! character(len=10) :: time
-    
-      ! call date_and_time(TIME=time)
-      ! write(*, '(a10,1x)', advance='no')  time
-       
-    ! end subroutine timestamp2
+
   end subroutine peeler
   
   !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1481,7 +1466,7 @@ program main
   implicit none
   
  ! integer :: i
-  character(len=200) :: GenoFile, PedigreeFile, AFFile, GenoOutFile, EditsFile
+  character(len=nchar_filename) :: GenoFile, PedigreeFile, AFFile, GenoOutFile, EditsFile
   character(len=3) :: GenoInFormat, GenoOutFormat
   real :: Threshold_pedclean
   logical :: do_pedclean, do_pedigree, mk_pedigree_object
@@ -1553,9 +1538,11 @@ contains
   !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   subroutine read_args()
     use sqa_fileIO, only: valid_formats
+    use sqa_general, only: paste
     integer :: nArg, i, x, z
-    character(len=32) :: arg, argOption
+    character(len=32) :: arg, argOption, FN_lbls(5)
     character(len=10) :: valid_methods(6)
+    character(len=nchar_filename) :: FN(5)
     logical :: only_read_edits    
     
     ! set defaults
@@ -1601,6 +1588,7 @@ contains
 
           case ('--version')
             print *, version
+            stop
              
           case ('--geno', '--geno-in')  
             i = i+1
@@ -1610,7 +1598,7 @@ contains
             i = i+1
             call get_command_argument(i, GenoInFormat)
             if (.not. any(valid_formats == GenoInFormat)) then
-              print *, 'ERROR: informat must be one of: ', valid_formats
+              print *, 'ERROR: informat must be one of: ', trim(paste(valid_formats))
               stop
             endif
             
@@ -1676,7 +1664,7 @@ contains
             i = i+1
             call get_command_argument(i, method)
             if (.not. any(valid_methods == method)) then
-              print *, 'ERROR: method must be one of: ', valid_methods
+              print *, 'ERROR: method must be one of: ', trim(paste(valid_methods))
               stop
             endif           
             
@@ -1706,7 +1694,7 @@ contains
             i = i+1
             call get_command_argument(i, GenoOutFormat)
             if (.not. any(valid_formats == GenoOutFormat)) then
-              print *, 'ERROR: outFormat must be one of: ', valid_formats
+              print *, 'ERROR: outFormat must be one of: ', trim(paste(valid_formats))
               stop
             endif
             
@@ -1766,6 +1754,17 @@ contains
     if (.not. with_log .and. .not. do_geno_out) then
       stop 'It does not seem wise to combine --no-geno-out with --no-edits-out'
     endif
+    
+    ! check if valid filename
+    FN = (/GenoFile, PedigreeFile, AFFile, GenoOutFile, EditsFile/)
+    FN_lbls = [character(len=32) :: '--geno-in', '--pedigree', '--freq', '--geno-out', '--edits-out']
+    do i=1,5
+      if (FN(i) == 'NoFile')  cycle
+      if (len_trim(FN(i))==0) then
+        stop 'Filename for '//trim(FN_lbls(i))//' may not be blank'
+      endif
+    enddo
+    
  
   end subroutine read_args
 
