@@ -240,6 +240,23 @@ contains
     endif
   
   end subroutine printt
+  
+  !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  ! return character array as comma-separated list
+  !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  function paste(vect) result(string)
+    character(len=*), intent(IN) :: vect(:)
+    character(len=20) :: nchar, len_vect_min1
+    character(len=100) :: fmt_string
+    character(len=999) :: string
+
+    write(nchar,*) len(vect)
+    write(len_vect_min1,*) size(vect) -1
+       
+    fmt_string = '(a'//nchar//', '//len_vect_min1//'(", ", a'//nchar//'))'
+    write(string, fmt_string)  vect
+  
+  end function paste
 
 end module sqa_general
 
