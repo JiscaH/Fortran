@@ -647,6 +647,7 @@ if (quiet < 1) then
   write(*,*) "" 
 endif
 
+! initiate all arrays
 call Initiate() !GenoFileName, GenoFormat, LifehistFileName, AgePriorFileName, PedigreeFileName, &
 ! OnlyListFileName, Er, ErrFlavour, AF_FileName, mt_FileName)  
 
@@ -1531,7 +1532,7 @@ contains
       call ReadPedFile(PedigreeFileName)
       if (quiet<1)  call timestamp()
       if (quiet<1)  print *, " # parents: ", COUNT(Parent /= 0, DIM=1)
-      if (quiet<1)  call timestamp()
+      if (quiet<1 .and. any(nC>0))  call timestamp()
       if (quiet<1 .and. any(nC>0))  print *, " # dummies: ", nC
     endif
 
@@ -19141,10 +19142,12 @@ implicit none
 character(len=nchar_filename), intent(IN) :: LifehistFileName
 integer, intent(INOUT) :: BYrange(nInd, 2)
 integer :: k,i,m, numcolLH, nDupLhID, j, ios, dumI(5)
-integer, allocatable, dimension(:) :: SexTmp, ByTmp, LyTmp
-integer, allocatable, dimension(:,:) :: BYrangeTmp
+integer, allocatable, dimension(:) :: SexLH, ByLH, LyLH
+integer, allocatable, dimension(:,:) :: BYrangeLH
 character(len=nchar_ID), allocatable, dimension(:) :: NameLH
 character(len=nchar_ID) :: dumC
+logical, allocatable :: done(:)
+logical :: dupLH
 
 numcolLH = FileNumCol(trim(LifehistFileName))
 nIndLH = FileNumRow(trim(LifehistFileName)) -1  ! has header
@@ -19153,16 +19156,16 @@ if (numcolLH/=3 .and. numcolLH/=5 .and. numcolLH/=6) then
   call Erstop("Invalid number of columns in file "//trim(LifehistFileName), .FALSE.)
 endif  
 
-allocate(SexTmp(nIndLH))
+allocate(SexLH(nIndLH))
 allocate(NameLH(nIndLH))
-allocate(ByTmp(nIndLH))
-allocate(ByRangeTmp(nIndLH, 2))
-allocate(LyTmp(nIndLH))
-SexTmp = -999
+allocate(ByLH(nIndLH))
+allocate(ByRangeLH(nIndLH, 2))
+allocate(LyLH(nIndLH))
+SexLH = -999
 NameLH = ' '
-BYTmp = -999
-ByRangeTmp = -999
-LyTmp = -999
+BYLH = -999
+ByRangeLH = -999
+LyLH = -999
 dumI = -999
 
 open(unit=103, file=trim(LifehistFileName), status="old")
@@ -19178,64 +19181,49 @@ open(unit=103, file=trim(LifehistFileName), status="old")
     if (.not. any(ID == dumC))  cycle  ! not genotyped
     call IOstat_handler(ios, k, LifehistFileName)
     NameLH(k) = dumC
-    SexTmp(k) = dumI(1)
-    BYtmp(k) = dumI(2)
-    if (numcolLH>=5)  ByRangeTmp(k,:) = dumI(3:4)
-    if (numcolLH==6) LyTmp(k) = dumI(5)
+    SexLH(k) = dumI(1)
+    BYLH(k) = dumI(2)
+    if (numcolLH>=5) ByRangeLH(k,:) = dumI(3:4)
+    if (numcolLH==6) LyLH(k) = dumI(5)
   enddo
 close(103)
 
 ! rearrange lifehistory info to same order as genotype file
-do k=1,nIndLH
-  if (NameLH(k) == ' ')  cycle  ! not genotyped
-  do i=1,nInd
-    if (BY(i) >= 0 .or. Sex(i)/=3) cycle  ! already matched     
-    if(Id(i)==NameLH(k)) then
-      if (BYtmp(k)>=0) then
-        BY(i) = BYtmp(k)
-      endif
-      if (SexTmp(k)==1 .or. SexTmp(k)==2 .or. SexTmp(k)==4) then
-        Sex(i)=SexTmp(k)
-      endif
-      if (numcolLH>=5) then
+allocate(done(nInd))
+done = .FALSE.
+dupLH = .FALSE.
+do i=1,nInd
+  do k=1,nIndLH 
+    if(Id(i) == NameLH(k)) then
+      if (done(i))  dupLH = .TRUE.
+      done(i) = .TRUE.
+      if (SexLH(k) >= 1 .and. SexLH(k) <= 4)  Sex(i) = SexLH(k)
+      if (BYLH(k) >= 0) then
+        BY(i) = BYLH(k)
+      else
         do m=1,2
-          if (BYRangeTmp(k,m)>=0)   BYRange(i,m) = BYRangeTmp(k,m)
+          if (BYRangeLH(k,m) >= 0)  BYRange(i,m) = BYRangeLH(k,m)
         enddo
       endif
-      if (numcolLH==6) then
-        if (LyTmp(k)>=0) then
-          YearLast(i) = LyTmp(k)
-        endif
+      if (LYLH(k) >= 0) then
+        YearLast(i) = LYLH(k)
+        if (YearLast(i) < BY(i))  YearLast(i) = -999   ! TODO: warning?
       endif
-    endif
+!      exit  ! increases runtime
+    endif    
   enddo
 enddo
 
-! check for duplicated IDs 
-nDupLhID = 0
-!allocate(DupLhIDs(nIndLH,2))
-do i=1,nIndLH-1
-  if (NameLH(i) == ' ')  cycle
-  do j=i+1, nIndLH
-    if (NameLH(j) == ' ')  cycle
-    if (NameLH(i) == NameLH(j)) then
-      nDupLhID = nDupLhID + 1
-!      DupLhIDs(nDupLhID,1) = i
-!      DupLhIDs(nDupLhID,2) = j
-    endif
-  enddo
-enddo
-
-if (nDupLhID > 0) then
+if (dupLH) then
   print *, ""
   print *, "WARNING: Some IDs are duplicated in LifeHistData"
   print *, "Sex and BirthYear from last instance will be used"
   print *, ""
 endif
 
-deallocate(ByTmp)
-deallocate(SexTmp)
-deallocate(ByRangeTmp)
+deallocate(ByLH)
+deallocate(SexLH)
+deallocate(ByRangeLH)
 deallocate(NameLH)
 
 end subroutine ReadLifeHist
