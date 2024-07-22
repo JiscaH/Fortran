@@ -136,7 +136,7 @@ higher or lower than the `lower` threshold, giving four different
 possibilities as illustrated as A–D in the figure (grey = selected pairs
 written to the output).
 
-<img src="[grm_tool_manual_files/figure-gfm/filter_illustration-1.png](https://github.com/JiscaH/sequoiaExtra/blob/main/GRM_tool/filter_illustration.png)" width="60%" />
+<img src="https://github.com/JiscaH/Fortran/blob/main/GRM_tool/filter_illustration.png" width="60%" />
 
 If combined with `--only`, the subset is within the specified group
 only. So for example,
