@@ -27,16 +27,19 @@ module Global_vars
   implicit none
   
   integer, parameter :: nchar_filename = 2000, nchar_ID = 40
+  integer :: nInd, nGroups
   integer, parameter :: ik10 = selected_int_kind(11)
   integer(kind=ik10) :: nrows_grm
-  integer, allocatable :: nSnp(:), indx(:,:)
-  integer(kind=ik10), allocatable :: hist_chunk(:,:,:), N_pairs_chunk(:,:), counts_chunk(:,:,:)
-  integer :: nBins, Nchunks
+  integer, allocatable :: nSnp(:), indx(:,:), pairs_only(:,:), InSubset(:)
+  integer(kind=ik10), allocatable :: hist_chunk(:,:,:,:), N_pairs_chunk(:,:,:), &
+   counts_chunk(:,:,:,:)
+  integer :: nBins, Nchunks, n_only_pairs
   character(len=nchar_ID), allocatable :: ID(:)
-  logical :: DoSummary, DoFilter(2), DoHist, OnlyAmong, quiet, IsGZ
-  logical, allocatable :: skip(:), IsDiagonal(:), InSubset(:)
+  character(len=4) :: zipper
+  logical :: DoSummary, DoFilter(2), DoHist, OnlyAmong, OnlyPairs, quiet, IsGZ, numeric_IDs
+  logical, allocatable :: keep(:), IsDiagonal(:)
   double precision :: lowr_d, upr_d, lowr_b, upr_b 
-  double precision, allocatable :: GRM(:), hist_brks(:), mean_SNPs_chunk(:,:), stats_chunk(:,:,:)
+  double precision, allocatable :: GRM(:), hist_brks(:), mean_SNPs_chunk(:,:,:), stats_chunk(:,:,:,:)
   
   
   contains
@@ -63,10 +66,18 @@ module Global_vars
     print '(a)',    '  --betw-upper   upper bound of R value between exported pairs (off-diagonal)'
     print '(a)',    '  --filter-out <file>  output file with pairs under lower / above upper threshold,'&
                     '                    defaults to <grmfile>_filter_output.txt'
-    print '(a)',    '  --only <file>  only consider pairs with one or both individuals listed,',&
+    print '(a)',    '  --only <file>  only consider pairs with one or both individuals listed, either',&
+                     '                   Numeric (faster) or character (slower), the latter with',&
                     '                    IDs in first/single column or columns FID (ignored) + IID'
-    print '(a)',    '  --only-among <file>  only consider pairs with both individuals listed'
+    print '(a)',    '  --only-among <file>  only consider pairs with both individuals listed.',&
+                    '                       Can NOT be combined with --only or --only-pairs'
+    print '(a)',    '  --only-pairs <file>  only consider listed pairs. Can NOT be combined with',&
+                    '                        --only or --only-among.'
+    print '(a)',    '  --numeric-IDs   flag to indicate that IDs in --only(-..) files are numeric',&
+                    '                       corresponding to the numeric IDs in the .grm.gz file',&
+                    '                       (= rownumbers in genotype file). Faster than character IDs.'             
     print '(a)',    '  --chunks <x>   number of chunks; partial summary statistics are calculated after each'
+    print '(a)',    '  --zipper <x>   either "pigz" (default) or "gzip"'
     print '(a)',    '  --quiet        hide messages'
     print '(a)',    ''
   end subroutine print_help
@@ -326,22 +337,95 @@ module Fun
 end module Fun
 
 !===============================================================================
+! Recursive Fortran 95 quicksort routine
+! sorts real numbers into ascending numerical order
+! Author: Juli Rew, SCD Consulting (juliana@ucar.edu), 9/03
+! Based on algorithm from Cormen et al., Introduction to Algorithms,1997
+! Made F conformant by Walt Brainerd
+
+! Adapted by J Huisman (jisca.huisman@gmail.com) to output rank, to
+! enable sorting of parallel vectors, and changed to decreasing rather 
+! than increasing order
+
+module qsort_c_module
+implicit none
+public :: QsortC
+private :: Partition
+
+ contains
+recursive subroutine QsortC(A, Rank)
+  double precision, intent(in out), dimension(:) :: A
+  integer, intent(in out), dimension(:) :: Rank
+  integer :: iq
+
+  if(size(A) > 1) then
+   call Partition(A, iq, Rank)
+   call QsortC(A(:iq-1), Rank(:iq-1))
+   call QsortC(A(iq:), Rank(iq:))
+  endif
+end subroutine QsortC
+
+subroutine Partition(A, marker, Rank)
+  double precision, intent(in out), dimension(:) :: A
+  integer, intent(in out), dimension(:) :: Rank
+  integer, intent(out) :: marker
+  integer :: i, j, TmpI
+  double precision :: temp
+  double precision :: x      ! pivot point
+  x = A(1)
+  i= 0
+  j= size(A) + 1
+  do
+   j = j-1
+   do
+    if (j < 1) exit
+    if (A(j) <= x) exit
+    j = j-1
+   end do
+   i = i+1
+   do
+    if (i >= size(A)) exit
+    if (A(i) >= x) exit
+    i = i+1
+   end do
+   if (i < j) then
+    ! exchange A(i) and A(j)
+    temp = A(i)
+    A(i) = A(j)
+    A(j) = temp 
+    
+    TmpI = Rank(i) 
+    Rank(i) = Rank(j)
+    Rank(j) = TmpI
+   elseif (i == j) then
+    marker = i+1
+    return
+   else
+    marker = i
+    return
+   endif
+  end do
+
+end subroutine Partition
+
+end module qsort_c_module
+
+!===============================================================================
 
 program main
   use Fun
   use stats_fun
   implicit none
    
-  integer :: x, i,j, nArg, nInd, g
-  double precision :: hist_opts(3)
-  character(len=32) :: arg, argOption
+  integer :: x, i,j,d,s
+  double precision :: hist_opts(3) 
   character(len=2) :: chk
   character(len=15) :: sumstat_lbls(8)
-  character(len=6) :: group_lbl(4)
-  character(len=8) :: part_lbl(4)
-  character(len=nchar_filename) :: grmFile, filterFile, summaryFile, onlyFile, histFile, outPrefix
-  logical :: FileExists
-  integer(kind=ik10), allocatable :: hist_counts(:,:)
+  character(len=6), allocatable :: subset_lbl(:)
+  character(len=8) :: part_lbl(2)
+  character(len=nchar_filename) :: grmFile, filterFile, summaryFile, onlyFile, &
+    onlyPairsFile, histFile, outPrefix  
+  integer(kind=ik10), allocatable :: hist_counts(:,:,:)
   
   write(*,*) ''
   write(*,*) REPEAT('~',24)
@@ -354,16 +438,20 @@ program main
   grmFile = 'nofile'
   outPrefix = grmFile
   onlyFile = 'nofile'
+  onlyPairsFile = 'nofile'
   summaryFile = 'default'
   filterFile = 'default'
   histFile = 'default'
   
   OnlyAmong = .FALSE.
+  OnlyPairs = .FALSE.
+  numeric_IDs = .FALSE.
   DoSummary = .TRUE.
   DoFilter = .FALSE.
   DoHist = .FALSE.
   quiet = .FALSE.
   IsGZ = .TRUE.
+  zipper = 'pigz'
   
   lowr_d = -HUGE(0D0)
   upr_d  = HUGE(0D0)
@@ -374,169 +462,15 @@ program main
   hist_opts = (/-1.5d0, 2.0d0, 0.05d0/)  ! first, last, step
 
   
-  ! read command line arguments:
-  nArg = command_argument_count()
-  i = 0
-  do x = 1, nArg
-    i = i+1
-    if (i > nArg)  exit
-    call get_command_argument(i, arg)
-    
-    select case (arg)
-      case ('--help')
-        call print_help()
-        stop
-        
-      case ('--in')
-        i = i+1
-        call get_command_argument(i, grmFile)
-        
-      case ('--notgz')
-        IsGZ = .FALSE.
-        
-      case ('--out-prefix')
-        i = i+1
-        call get_command_argument(i, outPrefix)
-        
-      case ('--summary-out')
-        i = i+1
-        call get_command_argument(i, summaryFile)
-        
-      case ('--no-summary')
-        DoSummary = .FALSE.
-        
-      case ('--hist')
-        DoHist = .TRUE.
-        call get_command_argument(i+1, argOption)
-        read(argOption, '(a2)') chk
-        if (chk /= '--' .and. argOption/='') then  ! optional arguments to --hist
-          do j=1,3
-            i = i+1
-            call get_command_argument(i, argOption)
-            if (argOption == '' .or. argOption=='--')  then
-              print *, '--hist requires either 0 or 3 arguments: first, last, step'
-              stop
-            endif
-            read(argOption, *) hist_opts(j)
-          enddo
-        endif       
-        
-      case ('--hist-out')
-        i = i+1
-        call get_command_argument(i, histFile)
-        
-      ! case ('--lower')
-        ! i = i+1
-        ! call get_command_argument(i, argOption)
-        ! read(argOption, *)  lowr_d
-        ! lowr_b = lowr_d
-        
-      ! case ('--upper')
-        ! i = i+1
-        ! call get_command_argument(i, argOption)
-        ! read(argOption, *)  upr_d
-        ! upr_b = upr_d
-        
-      case ('--diag-lower')
-        i = i+1
-        call get_command_argument(i, argOption)
-        read(argOption, *)  lowr_d
-        DoFilter(1) = .TRUE.
-        
-      case ('--diag-upper')
-        i = i+1
-        call get_command_argument(i, argOption)
-        read(argOption, *)  upr_d
-        DoFilter(1) = .TRUE.
-      
-      case ('--betw-lower')
-        i = i+1
-        call get_command_argument(i, argOption)
-        read(argOption, *)  lowr_b
-        DoFilter(2) = .TRUE.
-        
-      case ('--betw-upper')
-        i = i+1
-        call get_command_argument(i, argOption)
-        read(argOption, *)  upr_b
-        DoFilter(2) = .TRUE.
-        
-      case ('--filter-out')
-        i = i+1
-         call get_command_argument(i, filterFile)
-        
-      case ('--only ')
-        i = i+1
-        call get_command_argument(i, onlyFile)
-      
-      case ('--only-among')
-        i = i+1
-        call get_command_argument(i, onlyFile)
-        OnlyAmong = .TRUE.
-        
-      case ('--chunks')
-        i = i+1
-        call get_command_argument(i, argOption)
-        read(argOption, *)  Nchunks
-        if (Nchunks < 1 .or. Nchunks > 2000)  stop 'Nchunks must be >= 1 and <= 2000'
-        
-      case ('--quiet')
-        quiet = .TRUE.
-        
-      case default
-        print '(2a, /)', 'Unrecognised command-line option: ', arg
-        call print_help()
-        stop
-
-    end select
-  enddo        
+  ! read command line arguments
+  call read_args()
   
-  if (trim(outPrefix) == 'nofile') then
-    outPrefix = grmFile
-  endif
-  if (trim(summaryFile)=='default')  summaryFile = trim(outPrefix)//'_summary_stats.txt'
-  if (trim(filterFile)=='default')  filterFile = trim(outPrefix)//'_filter_output.txt'
-  if (trim(histFile)=='default')  histFile = trim(outPrefix)//'_hist_counts.txt'
+  ! check for invalid combinations of arguments
+  call check_args()
   
-  ! input check ------
-  if (grmFile == 'nofile') then
-    write (*,*)  "Please specify an input file, without file extensions"
-    write (*,*)
-    call print_help()
-    stop
-  else
-    inquire(file=trim(grmFile)//'.grm.id', exist = FileExists)
-    if (.not. FileExists) then
-      write(*,*)  "Input file ", trim(grmFile), ".grm.id not found"
-      stop
-    endif
-    if (IsGZ) then
-      inquire(file=trim(grmFile)//'.grm.gz', exist = FileExists)
-    else
-      inquire(file=trim(grmFile)//'.grm', exist = FileExists)
-    endif
-    if (.not. FileExists) then
-      write(*,*)  "Input file ", trim(grmFile), ".grm(.gz) not found"
-      stop
-    endif
-  endif
-
-  if (DoHist .and. .not. DoSummary) then
-    print *, '--hist cannot be combined with --no-summary'
-    stop
-  endif
-  
-  if (DoHist) then
-    if (hist_opts(2) < hist_opts(1)) then
-      print *, '--hist: last must be larger than first'
-      stop
-    endif
-    if (hist_opts(3) <= 0d0 .or.  hist_opts(3) > (hist_opts(2) - hist_opts(1))) then
-      print *, '--hist: step must be >0 and smaller than last - first'
-      stop
-    endif
-  endif
-  
+  ! check if files exist
+  call check_input_files()
+         
   if (ANY(DoFilter) .and. .not. quiet) then  ! diagonal
     call timestamp()
     print *, 'Using the following filtering thresholds:'
@@ -547,11 +481,8 @@ program main
     print *, ''
   endif
   
-  if (.not. DoSummary .and. .not. any(DoFilter)) then
-    print *, '--no-summary and no filter set: nothing to be done. See --help'
-    stop
-  endif
-  
+
+   ! overwrite warnings
    ! if (DoSummary .and. .not. quiet) then
     ! inquire(file=trim(summaryFile), exist = FileExists)
     ! if (FileExists)  print *, 'WARNING: '//trim(summaryFile)//' will be overwritten' 
@@ -594,40 +525,67 @@ program main
 
   
   ! read in --only list
-  allocate(skip(nInd))
+  allocate(keep(nInd))
   if (trim(onlyFile)/= "nofile") then
     if (.not. quiet) then
       call printt("Reading individuals in --only file "//trim(onlyFile)//" ... ")
     endif
     call ReadOnlyList(onlyFile)
   else
-    skip = .FALSE.
+    keep = .TRUE.
   endif
   
+  if (OnlyPairs) then  
+    if (.not. quiet) then
+      call printt("Reading pairs in --only-pairs file "//trim(onlyPairsFile)//" ... ")
+    endif
+    call ReadPairs(onlyPairsFile)
+    ! add pairs to keep list, for output summary
+    keep = .FALSE.
+    do x=1,SIZE(pairs_only,2)
+      keep(pairs_only(1,x)) = .TRUE.
+      keep(pairs_only(2,x)) = .TRUE.
+    enddo
+  else
+    allocate(pairs_only(2,1))
+    pairs_only = 0
+  endif
+  
+  if (OnlyPairs) then
+    nGroups = 4   ! Total / either indiv in --only / both indivs in --only / pair in --only-pairs 
+  else if (.not. all(keep)) then
+    nGroups = 3
+  else
+    nGroups = 1    
+  endif
+  
+  ! set up arrays to store histogram data
   if (DoHist) then   
     hist_brks = breaks(first=hist_opts(1), last=hist_opts(2), step=hist_opts(3))
     nBins = size(hist_brks)-1
-    if (any(skip)) then
-      allocate(hist_chunk(nBins,Nchunks+1,4))
-      allocate(hist_counts(nBins,4))
-    else
-      allocate(hist_chunk(nBins,Nchunks+1,2))
-      allocate(hist_counts(nBins,2))
-    endif
+    allocate(hist_chunk(nBins,Nchunks+1,2,nGroups))
+    hist_chunk = 0
+    allocate(hist_counts(nBins,2,nGroups))
+    hist_counts = 0
   endif
   
+  ! set up arrays to store summary data
   if (DoSummary) then
-    allocate(N_pairs_chunk(Nchunks+1,4))
-    allocate(mean_SNPs_chunk(Nchunks+1,4))
-    allocate(stats_chunk(4,Nchunks+1,4))
-    allocate(counts_chunk(4,Nchunks+1,4))
+    allocate(N_pairs_chunk(Nchunks+1,2,nGroups))
+    N_pairs_chunk = 0
+    allocate(mean_SNPs_chunk(Nchunks+1,2,nGroups))
+    mean_SNPs_chunk = 0D0
+    allocate(stats_chunk(4,Nchunks+1,2,nGroups))
+    stats_chunk = 0D0
+    allocate(counts_chunk(4,Nchunks+1,2,nGroups))
+    counts_chunk = 0
   endif
 
   ! read in GRM & filter
   call ProcessGRM(grmFile, filterFile)
  
   
-  ! calculate & write summary statistics
+  ! write summary statistics
   if (DoSummary) then
     sumstat_lbls(1) = 'minimum'
     sumstat_lbls(2) = 'maximum'
@@ -636,21 +594,23 @@ program main
     sumstat_lbls(5) = 'count_<-0.5'   ! NOTE: in R use read.table(.., check.names=FALSE)
     sumstat_lbls(6) = 'count_<0.625'
     sumstat_lbls(7) = 'count_>0.875'
-    sumstat_lbls(8) = 'count_>1.25'    
-    group_lbl = (/ 'total ', 'total ', 'subset', 'subset' /)
-    part_lbl  = (/ 'diagonal', 'between ', 'diagonal', 'between ' /)
+    sumstat_lbls(8) = 'count_>1.25'
+    allocate(subset_lbl(4))  ! max nGroups = 4
+    subset_lbl = (/ 'total ', 'across', 'among ', 'pairs ' /)
+    part_lbl  = (/ 'diagonal', 'between ' /)
   
     open(42, file=trim(summaryfile), action='write')
-      write(42,'(2a15, a20,a15, 4(5x,a10), 4(8x,a12))') 'Group', 'Part', 'N_pairs', 'N_SNPs', sumstat_lbls
-      do g=1,4
-        if (g>2 .and. .not. any(skip))  exit
-        write(42, '(2a15, i20, f15.2, 4f15.6, 4i20)') group_lbl(g), part_lbl(g), &
-          SUM(N_pairs_chunk(:,g)), wmean(mean_SNPs_chunk(:,g), N_pairs_chunk(:,g)), &
-           MINVAL(stats_chunk(1,:,g)), MAXVAL(stats_chunk(2,:,g)), & 
-           wmean(stats_chunk(3,:,g), N_pairs_chunk(:,g)), & 
-           wSD(stats_chunk(4,:,g), stats_chunk(3,:,g), N_pairs_chunk(:,g)), &  
-           SUM(counts_chunk(:,:,g), DIM=2)
-      enddo
+    write(42,'(2a15, a20,a15, 4(5x,a10), 4(8x,a12))') 'group', 'part', 'n_pairs', 'n_snps', sumstat_lbls
+    do s=1,nGroups    
+      do d=1,2        
+        write(42, '(2a15, i20, f15.2, 4f15.6, 4i20)') subset_lbl(s), part_lbl(d), &
+          SUM(N_pairs_chunk(:,d,s)), wmean(mean_SNPs_chunk(:,d,s), N_pairs_chunk(:,d,s)), &
+           MINVAL(stats_chunk(1,:,d,s)), MAXVAL(stats_chunk(2,:,d,s)), & 
+           wmean(stats_chunk(3,:,d,s), N_pairs_chunk(:,d,s)), & 
+           wSD(stats_chunk(4,:,d,s), stats_chunk(3,:,d,s), N_pairs_chunk(:,d,s)), &  
+           SUM(counts_chunk(:,:,d,s), DIM=2)
+       enddo
+    enddo
     close(42)
     if (.not. quiet) then
       call printt("summary statistics written to "//trim(summaryfile))
@@ -658,33 +618,270 @@ program main
   endif
   
   
+  ! write histogram bin counts
   if (DoHist) then   
-    do g=1,4
-      if (g>2 .and. .not. any(skip))  exit
-      hist_counts(:,g) = SUM(hist_chunk(:,:,g), DIM=2)
+    do s=1,nGroups
+      do d=1,2 
+        hist_counts(:,d,s) = SUM(hist_chunk(:,:,d,s), DIM=2)
+      enddo
     enddo
     
     open(101, file=trim(histFile), action='write')
-      if (any(skip)) then
-        write(101, '(a12, 4a25)')  'lower_bound', 'total_diagonal', 'total_between', &
-          'subset_diagonal', 'subset_between'
-      else
-        write(101, '(a12, 2a25)')  'lower_bound', 'diagonal', 'between'
-      endif
-      do x=1, nBins
-        write(101, '(f12.4, 4i25)')  hist_brks(x), hist_counts(x,:)
+    write(101,'(2a15, a12, a25)') 'group', 'part', 'lower_bound', 'count'
+    do s=1,nGroups
+      do d=1,2
+        do x=1, nBins
+          write(101, '(2a15, f12.4, i25)')  subset_lbl(s), part_lbl(d), hist_brks(x), hist_counts(x,d,s)
+        enddo
       enddo
+    enddo
     close(101)
-
     if (.not. quiet)  call printt("histogram counts written to "//trim(histFile))   
   endif
   
  
   ! clean up
-  call deallocall()
+  call deallocall() 
+  if (allocated(subset_lbl))    deallocate(subset_lbl)
   if (allocated(hist_counts))   deallocate(hist_counts)
   
+  
   if (.not. quiet)  call printt('Done.')
+  
+  
+  
+contains
+  !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  ! read command line arguments
+  !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ 
+  subroutine read_args()
+    integer :: x,i, nArg
+    character(len=32) :: arg, argOption
+  
+    nArg = command_argument_count()
+    i = 0
+    do x = 1, nArg
+      i = i+1
+      if (i > nArg)  exit
+      call get_command_argument(i, arg)
+      
+      select case (arg)
+        case ('--help')
+          call print_help()
+          stop
+          
+        case ('--in')
+          i = i+1
+          call get_command_argument(i, grmFile)
+          
+        case ('--notgz')
+          IsGZ = .FALSE.
+          
+        case ('--out-prefix')
+          i = i+1
+          call get_command_argument(i, outPrefix)
+          
+        case ('--summary-out')
+          i = i+1
+          call get_command_argument(i, summaryFile)
+          
+        case ('--no-summary')
+          DoSummary = .FALSE.
+          
+        case ('--hist')
+          DoHist = .TRUE.
+          call get_command_argument(i+1, argOption)
+          read(argOption, '(a2)') chk
+          if (chk /= '--' .and. argOption/='') then  ! optional arguments to --hist
+            do j=1,3
+              i = i+1
+              call get_command_argument(i, argOption)
+              if (argOption == '' .or. argOption=='--')  then
+                print *, '--hist requires either 0 or 3 arguments: first, last, step'
+                stop
+              endif
+              read(argOption, *) hist_opts(j)
+            enddo
+          endif       
+          
+        case ('--hist-out')
+          i = i+1
+          call get_command_argument(i, histFile)
+          
+        ! case ('--lower')
+          ! i = i+1
+          ! call get_command_argument(i, argOption)
+          ! read(argOption, *)  lowr_d
+          ! lowr_b = lowr_d
+          
+        ! case ('--upper')
+          ! i = i+1
+          ! call get_command_argument(i, argOption)
+          ! read(argOption, *)  upr_d
+          ! upr_b = upr_d
+          
+        case ('--diag-lower')
+          i = i+1
+          call get_command_argument(i, argOption)
+          read(argOption, *)  lowr_d
+          DoFilter(1) = .TRUE.
+          
+        case ('--diag-upper')
+          i = i+1
+          call get_command_argument(i, argOption)
+          read(argOption, *)  upr_d
+          DoFilter(1) = .TRUE.
+        
+        case ('--betw-lower')
+          i = i+1
+          call get_command_argument(i, argOption)
+          read(argOption, *)  lowr_b
+          DoFilter(2) = .TRUE.
+          
+        case ('--betw-upper')
+          i = i+1
+          call get_command_argument(i, argOption)
+          read(argOption, *)  upr_b
+          DoFilter(2) = .TRUE.
+          
+        case ('--filter-out')
+          i = i+1
+           call get_command_argument(i, filterFile)
+          
+        case ('--only ')
+          if (onlyFile /= 'nofile' .or. onlyPairsFile /= 'nofile') then
+            stop 'please specify ONE of --only, --only-among, --only-pairs'
+          endif
+          i = i+1
+          call get_command_argument(i, onlyFile)
+        
+        case ('--only-among')
+          if (onlyFile /= 'nofile' .or. onlyPairsFile /= 'nofile') then
+            stop 'please specify ONE of --only, --only-among, --only-pairs'
+          endif
+          i = i+1
+          call get_command_argument(i, onlyFile)
+          OnlyAmong = .TRUE.
+          
+        case ('--only-pairs')
+          if (onlyFile /= 'nofile')  stop 'please specify ONE of --only, --only-among, --only-pairs'
+          i = i+1
+          call get_command_argument(i, onlyPairsFile)
+          OnlyPairs = .TRUE.
+          
+        case('--numeric-IDs')
+          numeric_IDs = .TRUE.
+          
+        case ('--chunks')
+          i = i+1
+          call get_command_argument(i, argOption)
+          read(argOption, *)  Nchunks
+          if (Nchunks < 1 .or. Nchunks > 2000)  stop 'Nchunks must be >= 1 and <= 2000'
+          
+        case ('--zipper')
+          i = i+1
+          call get_command_argument(i, zipper)
+          if (zipper /= 'gzip' .and. zipper /= 'pigz') then
+            stop 'zipper must be "gzip" or "pigz"'
+          endif
+        
+        case ('--quiet')
+          quiet = .TRUE.
+          
+        case default
+          print '(2a, /)', 'Unrecognised command-line option: ', arg
+          call print_help()
+          stop
+
+      end select
+    enddo 
+   
+  end subroutine read_args
+  
+  
+  !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  ! check provided arguments
+  !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ 
+  subroutine check_args()
+  
+    if (DoHist .and. .not. DoSummary) then
+      print *, '--hist cannot be combined with --no-summary'
+      stop
+    endif
+    
+    if (DoHist) then
+      if (hist_opts(2) < hist_opts(1)) then
+        print *, '--hist: last must be larger than first'
+        stop
+      endif
+      if (hist_opts(3) <= 0d0 .or.  hist_opts(3) > (hist_opts(2) - hist_opts(1))) then
+        print *, '--hist: step must be >0 and smaller than last - first'
+        stop
+      endif
+    endif
+    
+    if (.not. DoSummary .and. .not. any(DoFilter)) then
+      print *, '--no-summary and no filter set: nothing to be done. See --help'
+      stop
+    endif
+  
+  end subroutine check_args
+  
+  
+  
+  !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  ! check if files exist
+  !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ 
+  subroutine check_input_files()
+    logical :: FileExists
+  
+    if (trim(outPrefix) == 'nofile') then
+      outPrefix = grmFile
+    endif
+    if (trim(summaryFile)=='default')  summaryFile = trim(outPrefix)//'_summary_stats.txt'
+    if (trim(filterFile)=='default')  filterFile = trim(outPrefix)//'_filter_output.txt'
+    if (trim(histFile)=='default')  histFile = trim(outPrefix)//'_hist_counts.txt'
+    
+    if (grmFile == 'nofile') then
+      write (*,*)  "Please specify an input file, without file extensions"
+      write (*,*)
+      call print_help()
+      stop
+    else
+      inquire(file=trim(grmFile)//'.grm.id', exist = FileExists)
+      if (.not. FileExists) then
+        write(*,*)  "Input file ", trim(grmFile), ".grm.id not found"
+        stop
+      endif
+      if (IsGZ) then
+        inquire(file=trim(grmFile)//'.grm.gz', exist = FileExists)
+      else
+        inquire(file=trim(grmFile)//'.grm', exist = FileExists)
+      endif
+      if (.not. FileExists) then
+        write(*,*)  "Input file ", trim(grmFile), ".grm(.gz) not found"
+        stop
+      endif
+    endif
+    
+    if (onlyFile /= 'nofile') then
+      inquire(file=trim(onlyFile), exist = FileExists)  
+      if (.not. FileExists) then
+        write(*,*)  "--only(-among) file ", trim(OnlyFile), " not found"
+        stop
+      endif
+    endif
+    
+    if (onlyPairsFile /= 'nofile') then
+      inquire(file=trim(onlyPairsFile), exist = FileExists)  
+      if (.not. FileExists) then
+        write(*,*)  "--only-pairs file ", trim(onlyPairsFile), " not found"
+        stop
+      endif
+    endif
+ 
+  end subroutine check_input_files
+  
   
      
 end program main
@@ -699,11 +896,11 @@ subroutine ProcessGRM(grmFile, filterFile)
   implicit none
   
   character(len=*), intent(IN) :: grmFile, filterFile
-  integer :: p, i, j, z, ios, g, t
+  integer :: p, i, j, z, ios, t, ox, d, s
   integer(kind=ik10) :: chunk_size, timing_y, y, a, n, x, print_chunk
   logical :: WritePair
   double precision :: r, CurrentTime(2)
-  logical, allocatable :: summary_mask(:,:)
+  logical, allocatable :: summary_mask(:,:,:)
               
   
   if (IsGZ) then
@@ -719,8 +916,11 @@ subroutine ProcessGRM(grmFile, filterFile)
     ! decompression instruction, this forms the flow into the pipe
     ! between brackets: run in separate subshell
     ! &: put the process in background
-    call EXECUTE_COMMAND_LINE("(pigz -dc  "//trim(grmFile)//".grm.gz > grmpipe) &")
-    !call EXECUTE_COMMAND_LINE("(gzip -dc  "//trim(grmFile)//".grm.gz > grmpipe) &")
+    if (zipper == 'pigz') then
+      call EXECUTE_COMMAND_LINE("(pigz -dc  "//trim(grmFile)//".grm.gz > grmpipe) &")
+    else
+      call EXECUTE_COMMAND_LINE("(gzip -dc  "//trim(grmFile)//".grm.gz > grmpipe) &")
+    endif
 
     ! open a read (outflow) connection to the pipe
     open(11, file="grmpipe", action='read') 
@@ -728,7 +928,7 @@ subroutine ProcessGRM(grmFile, filterFile)
     open(11, file=trim(grmFile)//".grm", action='read')
   endif
   
-  if (ANY(DoFilter)) then
+  if (ANY(DoFilter)) then  ! filter high/low R values
     open(42, file=trim(filterFile), action='write')  
     write(42, '(2a10, 2X, 2a40, a10, a15)') 'index1', 'index2', 'ID1', 'ID2', 'nSNP', 'R'
   endif  
@@ -748,22 +948,24 @@ subroutine ProcessGRM(grmFile, filterFile)
       allocate(nSnp(chunk_size))      
       allocate(IsDiagonal(chunk_size))     
       allocate(InSubset(chunk_size))    
-      allocate(summary_mask(chunk_size,4))
+      allocate(summary_mask(chunk_size,2,nGroups))
       
       x = 0
       GRM = -999D0
       indx = 0
       nSnp = 0
       IsDiagonal = .FALSE.
-      InSubset = .TRUE.      
+      InSubset = 0   ! 0 = total; 1 = 1 indiv in --only subset; 2 = both indivs in --only subset; 
+                     ! 3 = pair in --only-pairs 
       summary_mask = .FALSE.
     endif
-    
+        
     call cpu_time(CurrentTime(1))
     p = 1   ! chunk number
     x = 1   ! pair number within chunk
     n = 0   ! filtered pair number
     t = 1   ! for progress updates
+    ox = 1  ! counter for pairs_only array
     
     do y = 1, nrows_grm
 
@@ -775,42 +977,41 @@ subroutine ProcessGRM(grmFile, filterFile)
         print *, ''
       endif  
 
-     if (.not. quiet .and. MOD(y, print_chunk)==0) then      
-       call timestamp()
-       print *, y, '  ', t*5, '%'
-       t = t+1 
-     endif  
+      if (.not. quiet .and. MOD(y, print_chunk)==0) then      
+        call timestamp()
+        print *, y, '  ', t*5, '%'
+        t = t+1 
+      endif  
 
       read(11, *, iostat=ios) i,j,z,r  
-      if (ios/=0) exit   ! stop if end of file / incorrect entry
-      if (skip(i) .and. skip(j)) then
-        if (DoSummary) then
-          InSubset(x) = .FALSE.
-        else
-          cycle 
+      if (ios/=0) exit   ! stop if end of file / incorrect entry 
+      if (nGroups > 1) then
+        if (pairs_only(1,ox)==i .and. pairs_only(2,ox) == j) then
+          InSubset(x) = 3
+          if (ox < size(pairs_only,2))  ox = ox +1
+        else if (keep(i) .and. keep(j)) then
+          InSubset(x) = 2
+        else if (keep(i) .or. keep(j)) then
+          InSubset(x) = 1
         endif
+        if (.not. DoSummary) then
+          if (InSubset(x) == 0 .or. &
+              (OnlyPairs .and. InSubset(x) < 3) .or. &
+              (OnlyAmong .and. InSubset(x) < 2))  cycle
+        endif 
       endif
-      if (OnlyAmong) then
-        if (skip(i) .or. skip(j)) then
-          if (DoSummary) then
-            InSubset(x) = .FALSE.
-          else
-            cycle
-          endif
-        endif
-      endif
-      if (DoSummary) then
+
+      if (DoSummary) then   ! else only directly write i,j,z & r to file
         indx(:,x) = (/i,j/)
         nSnp(x) = z
         GRM(x) = r
         if (i==j)  Isdiagonal(x) = .TRUE.
       endif
-!      if (y > 994 .and. y < 1006)  print *, y, p, x, i,j, IsDiagonal(x), InSubset(x), nSnp(x), GRM(x)
-!      if (i==j .and. x<300)  print *, p, x, i, IsDiagonal(x), skip(i), InSubset(x)
       
-      
-!      if (.not. ANY(DoFilter)) cycle
-      ! write to outfile entries that meet criteria
+ !     if (y < 20)  print *, y, p, x, i,j, IsDiagonal(x), InSubset(x), nSnp(x), GRM(x)
+!      if (i==j .and. x<300)  print *, p, x, i, IsDiagonal(x), keep(i), InSubset(x)
+           
+      ! write to outfile entries with R value that meets criteria
       WritePair = .FALSE.
       if (i==j .and. DoFilter(1)) then  ! diagonal
         if (upr_d > lowr_d) then
@@ -830,50 +1031,55 @@ subroutine ProcessGRM(grmFile, filterFile)
        write(42, '(2i10, 2X, 2a40, i10, e15.6)')  i, j, ID(i), ID(j), z, r
      endif 
      
-     if (DoSummary .and. (MOD(y, chunk_size)==0 .or. y==nrows_grm)) then      
-        summary_mask(:,1) = IsDiagonal
-        summary_mask(:,2) = .not. IsDiagonal
-        summary_mask(:,3) = IsDiagonal .and. InSubset
-        summary_mask(:,4) = .not. IsDiagonal .and. InSubset
+     ! if chunk size reached, summarise data from this chunk
+     if (DoSummary .and. (MOD(y, chunk_size)==0 .or. y==nrows_grm)) then
+        do s=1,nGroups   ! total; across; among; pairs
+          summary_mask(:,1,s) = IsDiagonal .and. InSubset >= s-1
+          summary_mask(:,2,s) = .not. IsDiagonal .and. InSubset >= s-1
+!          print *, y, p, x, s, ':', COUNT(summary_mask(:,1,s)), COUNT(summary_mask(:,2,s))
+        enddo
         
-!        print *, y, p, x, y>nrows_grm, COUNT(summary_mask(:,2)), &
-!           COUNT(((/ (a, a=1,chunk_size)/) <= x)), &
-!           COUNT(summary_mask(:,2) .and. ((/ (a, a=1,chunk_size)/) <= x))
-        
-        if (y==nrows_grm) then  ! last chunk
-          do g=1,4
-            summary_mask(:,g) = summary_mask(:,g) .and. ((/ (a, a=1,chunk_size)/) <= x)
+!        print *, y, p, x, COUNT(summary_mask(:,1)), COUNT(summary_mask(:,2))
+       
+        if (y==nrows_grm) then  ! last chunk may be shorter
+          do s=1,nGroups
+            do d=1,2  ! diagonal/off-diagonal
+              summary_mask(:,d,s) = summary_mask(:,d,s) .and. ((/ (a, a=1,chunk_size)/) <= x)
+            enddo
           enddo
         endif
         
-        do g=1,4
-          if (g>2 .and. .not. any(skip))  exit
-          N_pairs_chunk(p,g) = COUNT(summary_mask(:,g))
-          mean_SNPs_chunk(p,g) = mean_SNPs(summary_mask(:,g))  
-          stats_chunk(:,p,g) = sumstats(summary_mask(:,g))
-          counts_chunk(:,p,g) = sumstats_counts(summary_mask(:,g))
+        do s=1,nGroups
+          do d=1,2
+            N_pairs_chunk(p,d,s) = COUNT(summary_mask(:,d,s))
+            mean_SNPs_chunk(p,d,s) = mean_SNPs(summary_mask(:,d,s))  
+            stats_chunk(:,p,d,s) = sumstats(summary_mask(:,d,s))
+            counts_chunk(:,p,d,s) = sumstats_counts(summary_mask(:,d,s))
+          enddo
         enddo
         
         if (DoHist) then
-          do g=1,4
-            if (g>2 .and. .not. any(skip))  exit
-            hist_chunk(:,p,g) = grm_hist(summary_mask(:,g))
+          do s=1,nGroups
+            do d=1,2
+              hist_chunk(:,p,d,s) = grm_hist(summary_mask(:,d,s))
+            enddo
           enddo
         endif
         
         if (y==nrows_grm)  exit
         
+        ! start new chunk
         p = p +1
         x = 0
         GRM = -999D0
         indx = 0
         nSnp = 0
         IsDiagonal = .FALSE.
-        InSubset = .TRUE.      
+        InSubset = 0      
         summary_mask = .FALSE.
       endif 
       
-      x = x+1      
+      x = x+1   ! pair number within chunk
   
     end do
   
@@ -906,7 +1112,7 @@ end subroutine ProcessGRM
 !===============================================================================
 
 subroutine ReadOnlyList(FileName)
-  use Global_vars, ONLY: Id, skip
+  use Global_vars, ONLY: Id, keep, nInd
   use Fun
   implicit none
 
@@ -918,32 +1124,42 @@ subroutine ReadOnlyList(FileName)
   ncol  = FileNumCol(trim(FileName))
   
   if (.not. quiet) then
-    if (ncol==2) then
+    if (ncol==2 .and. .not. numeric_IDs) then
       call printt("--only file in 2-column format, assuming IDs in column 2 ...")
     else
       call printt("--only file in 1-column or multi-column format, assuming IDs in column 1 ...")
     endif
   endif
 
-  skip = .TRUE.
+  ! if a --only file is provided, do not keep any individual unless it is listed
+  keep = .FALSE.
 
   ! single column (ignore all other columns)
 !  call printt("Reading individuals in --only file "//trim(FileName)//" ... ")
   open(unit=103, file=trim(FileName), status="old")
     do x=1, nrows
-      if (ncol==2) then   ! PLINK format: FID + IID column
-        read(103, *,IOSTAT=IOerr)  tmpX, tmpC
+      if (numeric_IDs) then
+        read(103, *,IOSTAT=IOerr)  i 
       else
-        read(103, *,IOSTAT=IOerr)  tmpC
+        if (ncol==2) then   ! PLINK format: FID + IID column
+          read(103, *,IOSTAT=IOerr)  tmpX, tmpC
+        else
+          read(103, *,IOSTAT=IOerr)  tmpC
+        endif
       endif
       if (IOerr > 0) then
         print *, "Wrong input in file "//trim(FileName)//" on line ", x
         stop
-      else if (IOerr < 0) then
-        exit   ! EOF
+      endif
+      if (numeric_IDs) then
+        if (i < 1 .or. i > nInd) then
+          print *, 'numeric IDs in --only file must be between 1 and ', nInd, ', got: ', i
+          stop
+        endif
+        keep(i) = .TRUE.
       else
-        do i=1, size(Id)
-          if (Id(i) == tmpC) skip(i) = .FALSE.
+        do i=1, nInd
+          if (Id(i) == tmpC)  keep(i) = .TRUE.
         enddo
       endif
     enddo
@@ -951,10 +1167,111 @@ subroutine ReadOnlyList(FileName)
 
   if (.not. quiet) then
     call timestamp()
-    print *, 'read ', COUNT(.not. skip) ,' unique individuals present in GRM from --only file'
+    print *, 'read ', COUNT(keep) ,' unique individuals present in GRM from --only file'
   endif
 
 end subroutine ReadOnlyList
+
+!===============================================================================
+
+subroutine ReadPairs(FileName)
+  use Global_vars, ONLY: Id, pairs_only, nInd
+  use Fun
+  use qsort_c_module
+  implicit none
+
+  character(len=nchar_filename), intent(IN) :: FileName
+  integer :: x, i,tmpI(2), IOerr, ncol, k
+  character(len=nchar_ID) :: tmpC(2)
+  ! for sorting pairs in grm order:
+  integer, allocatable :: Rank(:), pairs_only_tmp(:,:)
+  double precision, allocatable :: pair_dbl(:)  
+
+  n_only_pairs = FileNumRow(trim(FileName))  ! no header
+  ncol  = FileNumCol(trim(FileName))
+  
+  if (.not. quiet) then
+    if (ncol<2) then
+      call printt("--only-pairs file should have 2 columns with IDs, found 1 column ...")
+    else if (ncol > 2) then
+      call printt("--only-pairs file has >2 columns, assuming IDs are in columns 1 + 2 ...")
+    endif
+  endif
+
+  allocate(pairs_only(2,n_only_pairs))
+  pairs_only = 0
+
+  ! single column (ignore all other columns)
+!  call printt("Reading individuals in --only file "//trim(FileName)//" ... ")
+  open(unit=103, file=trim(FileName), status="old")
+    do x=1, n_only_pairs
+      if (numeric_IDs) then
+        read(103, *,IOSTAT=IOerr)  tmpI
+      else
+        read(103, *,IOSTAT=IOerr)  tmpC
+      endif
+      if (IOerr > 0) then
+        print *, "Wrong input in file "//trim(FileName)//" on line ", x
+        stop
+      endif
+      if (numeric_IDs) then
+        do k=1,2
+          if (tmpI(k) < 1 .or. tmpI(k) > nInd) then
+            print *, 'numeric IDs in --only-pairs file must be between 1 and ', nInd, ', got: ', tmpI(k)
+            stop
+          endif
+        enddo
+        pairs_only(:,x) = tmpI  
+      else
+        do k=1,2
+          do i=1, nInd
+            if (Id(i) == tmpC(k))  pairs_only(k,x) = i
+          enddo
+        enddo
+        if (any(pairs_only(:,x) == 0)) then
+          print *, 'Pair on row ', x, ' of --only-pairs file contains ID(s) not in .grm.id: ', tmpC
+          stop
+        endif
+      endif
+    enddo
+  close(103)
+  
+  ! sort pairs_only in same order as they will be encountered in .grm.gz:
+  ! 1 1
+  ! 2 1
+  ! 2 2
+  ! 3 1
+  ! etc.
+  do x=1, n_only_pairs
+    if (pairs_only(2,x) > pairs_only(1,x)) then  ! swap
+      tmpI = pairs_only(:,x)
+      pairs_only(1,x) = tmpI(2)
+      pairs_only(2,x) = tmpI(1)
+    endif
+  enddo
+  
+  allocate(Rank(n_only_pairs))
+  Rank = (/ (x, x=1, n_only_pairs, 1) /)  ! vector to be sorted
+  ! sorting algorithm uses double precision input
+  allocate(pair_dbl(n_only_pairs))
+  ! add 2nd ID as fractional element
+  pair_dbl = REAL(pairs_only(1,:), 8) + pairs_only(2,:)/REAL(n_only_pairs,8)    
+  call QsortC(pair_dbl, Rank)
+  deallocate(pair_dbl)
+  
+  allocate(pairs_only_tmp(2,n_only_pairs))
+  do x=1,n_only_pairs
+    pairs_only_tmp(:,x) = pairs_only(:,Rank(x))
+  enddo
+  call move_alloc(pairs_only_tmp, pairs_only)   ! from, to
+  deallocate(Rank)
+
+  if (.not. quiet) then
+    call timestamp()
+    print *, 'read ', n_only_pairs ,' pairs from --only-pairs file'
+  endif
+
+end subroutine ReadPairs
 
 !===============================================================================
 
@@ -964,17 +1281,18 @@ subroutine deallocall
   
   if (allocated(ID))    deallocate(ID)  
   if (allocated(GRM))   deallocate(GRM)
-  if (allocated(skip))  deallocate(skip)
+  if (allocated(keep))  deallocate(keep)
   if (allocated(IsDiagonal))  deallocate(IsDiagonal)
-  if (allocated(InSubset))  deallocate(InSubset)
+  if (allocated(InSubset))    deallocate(InSubset)
   if (allocated(hist_brks))   deallocate(hist_brks)
-  if (allocated(hist_chunk))   deallocate(hist_chunk)
+  if (allocated(hist_chunk))  deallocate(hist_chunk)
   if (allocated(nSnp))   deallocate(nSnp)
   if (allocated(indx))   deallocate(indx)
-  if (allocated(N_pairs_chunk))  deallocate(N_pairs_chunk)
-  if (allocated(mean_SNPs_chunk))  deallocate(mean_SNPs_chunk)
-  if (allocated(stats_chunk))  deallocate(stats_chunk)
-  if (allocated(counts_chunk))  deallocate(counts_chunk)
+  if (allocated(N_pairs_chunk))   deallocate(N_pairs_chunk)
+  if (allocated(mean_SNPs_chunk)) deallocate(mean_SNPs_chunk)
+  if (allocated(stats_chunk))   deallocate(stats_chunk)
+  if (allocated(counts_chunk))  deallocate(counts_chunk)  
+  if (allocated(pairs_only))    deallocate(pairs_only)
   
 end subroutine deallocall
 
