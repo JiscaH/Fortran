@@ -26,9 +26,10 @@ use sqa_general, ONLY: AHWE, OHWE, OcA, AKAP, OKAP, OKOP, AKA2P, OKA2P, &
   timestamp, printt
 implicit none
 
-character(len=*), parameter :: version = 's2.11 (27 May 2024)'
+character(len=*), parameter :: version = 's2.11.1 (24 July 2024)'
 integer :: nInd, nSnp, nIndLH, maxSibSize, MaxOppHom, MaxMendelE, MaxMismatchDup, &
-  Hermaphrodites, nC(2), nYears, maxAgePO, nPairs, Complx, quiet, AgePhase, BYzero, ID_len, mxCP
+  Hermaphrodites, nC(2), nYears, maxAgePO, nPairs, Complx, quiet, AgePhase, BYzero, &
+  ID_len, mxCP, viginti(20)
 integer, parameter :: mxA=2**6, & ! max no. ancestors considered when testing for pedigree loop
 !   mxCP = 50, &  ! max no. candidate parents per sex   -- now readspecs()
    MaxMaxAgePO = 101, &  ! maximum of MaxAgePO
@@ -233,7 +234,37 @@ end subroutine Rprint
 subroutine rchkusr    ! stand-in for R subroutine
 ! do nothing
 end subroutine rchkusr
+
 !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ 
+! print progress in (slow) loop over all individuals
+subroutine print_progress(xi,xc)
+  integer, intent(IN) :: xi  ! individual number
+  integer, intent(INOUT) :: xc  ! chunk number
+
+  call timestamp(.FALSE.)
+  print *, xi, '  ', xc*5, '%'
+  xc = xc +1
+end subroutine print_progress
+
+
+!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+! create a sequence from 1 to n, with length equal to n_steps
+function mk_seq(n, n_steps) result(seq) 
+  integer, intent(IN) :: n, n_steps
+  integer, allocatable :: seq(:)
+  integer :: i
+  real, allocatable :: probs(:)
+  
+  allocate(probs(n_steps))
+  allocate(seq(n_steps))
+  
+  probs = (/ (i,i=1,n_steps) /) / real(n_steps)
+  seq = NINT( probs * n )
+  if (seq(1) == 0)  seq(1) = 1
+  if (seq(n_steps) > n)  seq(n_steps) = n
+  
+end function mk_seq
+!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 end module Global
 
@@ -1542,6 +1573,10 @@ contains
       if (quiet<1)  call timestamp()
       if (quiet<1)  print *, "--only: ", COUNT(.not. skip), " individuals out of ", nInd
     endif
+    
+    ! helper array to print progress every 5%, 10%, ... of individuals
+    viginti =  mk_seq(nInd, 20)
+    
   end subroutine Initiate
   
   function getAF(FileName)  result(AF)
@@ -1934,7 +1969,7 @@ integer :: namb, AmbigID(nAmbMax, 2), ambigrel(nAmbMax,2), BYtmp(2), &
   ambigoh(nAmbMax), ntrio, trioIDs(nInd, 3), trioOH(nInd, 3), ID_len_ambig
 double precision :: ambiglr(nAmbMax, 2), trioLR(nInd, 3) 
 integer :: i, j, k, x, topX, Anci(2,mxA), Ancj(2,mxA), maybe, Lboth, &
-  u,v, ncp, CandPar(mxCP), m
+  u,v, ncp, CandPar(mxCP), m, t
 double precision :: LL(7), LLtmp(7,3), dLL, LRR(3), LLX(7), LLP(3)
 character(len=2) :: RelName(9)
 character(len=200) :: HeaderFMT_pairs, DataFMT_pairs, HeaderFMT_triads, DataFMT_triads
@@ -1951,12 +1986,11 @@ if (.not. allocated(IndBY)) then   ! when all BY known
   IndBY = LOG10(1.0D0/nYears)
 endif
 
+t = 1
 do i=1,nInd-1
   if (nAmb==nAmbMax)  exit   
   if (MODULO(i,200)==0)   call rchkusr()
-  if (quiet<1 .and. nInd>1500) then 
-    if (MODULO(i,500)==0) call Rprint(" ", (/i/), (/0.0D0/), "INT")
-  endif 
+  if (quiet==-1 .and. any(viginti==i)) call print_progress(i,t)
   call GetAncest(i,1,Anci)
   
   do j=i+1,nInd 
@@ -2190,7 +2224,7 @@ character(len=nchar_filename) :: OutFileName
 character(len=200) :: HeaderFMT, DataFMT
 integer :: IOerr, nCols, theseCols(9), x, y, pairIDs(nP,2), psex(nP,2), &
   pairAgediff(nP), pairFocal(nP), pairk(nP), pdrop(nP, 2), &
-  ij(2), kij(2), Sex_ij(2), a, m, curPar(2,2), top(nP), BYtmp(2)
+  ij(2), kij(2), Sex_ij(2), a, m, curPar(2,2), top(nP), BYtmp(2), t, viginti_pairs(20)
 double precision :: LLpair(nP, 7), LLa(7), dl(nP), IndBYtmp(1:nYears,2,5)
 
 ColNamesOUT = (/ "ID1     ", "ID2     ", "Sex1    ", "Sex2    ", "AgeDif  ", &
@@ -2268,13 +2302,10 @@ enddo
 LLpair = Missing
 top = 7
 dL = -999D0
+viginti_pairs =  mk_seq(nP, 20)
+t = 1
 do x = 1, nP
-  if (quiet<1 .and. nP>20000) then
-    if (MODULO(x,5000)==0)  call Rprint(" ", (/x/), (/0.0D0/), "INT")
-  else if (quiet<1 .and. nP>2000) then
-    if (MODULO(x,500)==0)  call Rprint(" ", (/x/), (/0.0D0/), "INT")
-  endif
-
+  if (quiet<1 .and. any(viginti_pairs == x))   call print_progress(x,t)
   ij = pairIDs(x,:)
   
   ! temp. drop parents
@@ -3220,7 +3251,7 @@ use Global
 implicit none
 
 logical, intent(IN) :: ParOnly, DropSkip  ! T:only parents / F:also dummy parents
-integer :: i, k, x, curPar(2), BYrank(nInd)
+integer :: i, k, x, curPar(2), BYrank(nInd), t
 logical :: parOK(2), dropS
 double precision :: LLRpair!, LL(7,2)
 
@@ -3228,11 +3259,7 @@ call getRank_i(BYrank)
 
 do x=1, nInd
   if (MODULO(x,100)==0)  call rchkusr()
-  if (quiet==-1 .and. nInd>5000) then
-    if (MODULO(x,1000)==0)  call Rprint("", (/x/), (/0.0D0/), "INT")
-  else if (quiet==-1 .and. nInd>500) then
-    if (MODULO(x,200)==0)  call Rprint("", (/x/), (/0.0D0/), "INT")
-  endif
+  if (quiet==-1 .and. any(viginti==x)) call print_progress(x,t)
   
   i = BYRank(x)
   curPar = Parent(i,:)
@@ -3320,7 +3347,7 @@ implicit none
 integer, intent(IN) :: BYrank(nInd)
 character(len=200), intent(IN) :: AssignmentLogFile
 integer :: i, j, x, y, k, CandPar(5*mxCP, 2), nCP(2), curPar(2), SexTmp(2), &
-  CP_rank(5*mxCP), CP_tmp(5*mxCP), mxxCP
+  CP_rank(5*mxCP), CP_tmp(5*mxCP), mxxCP, t
 double precision :: ALR, LRQ, LLR_CP(5*mxCP)
 logical :: AncOK, withLog
 
@@ -3347,8 +3374,10 @@ if (withLog) then
   ! FILE STAYS OPEN !
 endif
 
+t=1
 do x=1, nInd
   if (MOD(x,200)==0) call rchkusr()  
+  if (quiet==-1 .and. any(viginti==x)) call print_progress(x,t)
   i = BYRank(x)  
   
   if (skip(i))  cycle
@@ -4937,7 +4966,7 @@ implicit none
 character(len=2), intent(IN) :: RoundC   ! for output file name
 integer, intent(OUT) :: PairID(XP*nInd,2), PairType(XP*nInd)
 logical :: UseAge, cPair, matpat(2)
-integer :: k, i, j, top, PairTypeTmp(XP*nInd), PairIDtmp(XP*nInd,2), x
+integer :: k, i, j, top, PairTypeTmp(XP*nInd), PairIDtmp(XP*nInd,2), x, t
 double precision :: dLL, PairLLRtmp(XP*nInd), LL(7), LLg(7), LRS(2), PairLLR(XP*nInd)
 integer, allocatable, dimension(:) :: Rank
 double precision, allocatable, dimension(:) :: SortBy
@@ -4951,11 +4980,7 @@ UseAge = AgePhase > 0
 
 do i=1,  nInd-1  
   if (MODULO(i,100)==0) call rchkusr()
-  if (nInd > 5000) then
-    if (quiet==-1 .and. MODULO(i,500)==0)   call Rprint("", (/i/), (/0D0/), "INT")  
-  else 
-    if (quiet==-1 .and. MODULO(i,200)==0)   call Rprint("", (/i/), (/0D0/), "INT")  
-  endif
+  if (quiet==-1 .and. any(viginti==i)) call print_progress(i,t)
   if (ALL(Parent(i,:)/=0)) cycle
   do j=i+1,nInd
     if (skip(i) .and. skip(j))  cycle
@@ -9646,19 +9671,17 @@ use Global
 implicit none
 
 integer, intent(IN) :: PairID(XP*nInd,2), PairType(XP*nInd)
-integer :: k, x, n, m, ij(2), sx(2), topX, u, fcl, Par(2), topFS, topXi
+integer :: k, x, n, m, ij(2), sx(2), topX, u, fcl, Par(2), topFS, topXi,t,viginti_pairs(10)
 double precision :: LL(7,2), dLL, LLx(7, 2,2), dLLtmp(maxSibSize), dLLi
 logical :: IsPair, FSM, DoLater
-       
+
+decem_pairs = mk_seq(nPairs, 10)      
+t=1      
 do x=1, nPairs
   if (MODULO(x,200)==0) call rchkusr()
   LL = missing
   ij = PairID(x,:)
-  if (nPairs > 5000) then
-    if (quiet==-1 .and. MODULO(x,500)==0)   call Rprint("", (/x/), (/0D0/), "INT")  
-  else if (nPairs > 500) then
-    if (quiet==-1 .and. MODULO(x,200)==0)   call Rprint("", (/x/), (/0D0/), "INT")  
-  endif
+  if (quiet==-1 .and. any(decem_pairs==x)) call print_progress(x,t)
     
   do k=1,2
     if (k/=PairType(x) .and. PairType(x)/=3)  cycle
@@ -10130,7 +10153,7 @@ use CalcLik
 implicit none
 
 integer :: x, i, j, k, s, curPar(2), nCP(2), CandPar(mxCP, 2), &
-   TopTmp, BYrank(nInd)
+   TopTmp, BYrank(nInd),t
 double precision :: LLP(2), ALR(2), LL(7,2), LRQ, dLL, LRFS(mxCP,2,2), LLtmp(7,2)
 logical :: DoNewPars, AncOK, DropS, KeepOld
 
@@ -10141,14 +10164,10 @@ else
 endif
 
 call getRank_i(BYrank)
-
+t=1
 do x=1, nInd
   if (MODULO(x,100)==0)  call rchkusr()
-  if (nInd > 5000) then
-    if (quiet==-1 .and. MODULO(x,500)==0)   call Rprint("", (/x/), (/0D0/), "INT")  
-  else if (nInd > 500) then
-    if (quiet==-1 .and. MODULO(x,200)==0)   call Rprint("", (/x/), (/0D0/), "INT")  
-  endif
+  if (quiet==-1 .and. any(viginti==x)) call print_progress(x,t)
   i = BYRank(x)
   if (skip(i))  cycle
   if (ALL(Parent(i,:)/=0) .and. .not. ToCheck(i)) cycle
@@ -10853,15 +10872,15 @@ use Global
 implicit none
 
 !logical, intent(IN) :: ExtraAge
-integer :: i, j, k, nCG(2,2), CandG(2,mxCP, 2), n, s, BYrank(nInd), x
+integer :: i, j, k, nCG(2,2), CandG(2,mxCP, 2), n, s, BYrank(nInd), x,t
 double precision :: LRS, LRG, ALR, ALRx(2), LRx, LLx(7,2), LL(7,2)
 logical :: AncOK, MaybePair
 
 call getRank_i(BYrank)
-
+t=1
 do x=1, nInd
   if (MODULO(x,200)==0)  call rchkusr()
-  if (MODULO(x,200)==0 .and. quiet==-1 .and. nInd>500)  call Rprint("", (/x/), (/0D0/), "INT") 
+  if (quiet==-1 .and. any(viginti==x)) call print_progress(x,t)
 
   i = BYRank(x)
   if (skip(i))  cycle
@@ -10967,7 +10986,7 @@ subroutine FsibsGPs
 use Global
 implicit none
 
-integer :: x, j, fsx(maxSibSize), k,m,r, nCG(2,2), candGP(mxCP,2,2), SAB(2), ix, n
+integer :: x, j, fsx(maxSibSize), k,m,r, nCG(2,2), candGP(mxCP,2,2), SAB(2), ix, n,t
 logical :: maybeGP(2,2), AncOK
 double precision :: ALR, LRG, LLX(2,2), dx(maxSibSize), LRS
 
@@ -10976,9 +10995,9 @@ if (.not. (DoMtDif .or. any(AgePriorA(:,1,2) /= AgePriorA(:,1,3)) .or. &
 !  print *, 'Not doing FsibsGPs'
   return   ! no way to distinguish between maternal and paternal grandparents
 endif
-
+t=1
 do x=1, nInd
-  if (quiet==-1 .and. MODULO(x,200)==0 .and. nInd>500)   call Rprint("", (/x/), (/0D0/), "INT") 
+  if (quiet==-1 .and. any(viginti==x)) call print_progress(x,t)
   if (nFS(x) ==0 )  cycle  ! not 'primary' sib of FS cluster
   if (.not. ALL(Parent(x,:) < 0) .or. ALL(parent(x,:)==0))  cycle
   if (all(Parent(x,:)==0) .and. BY(x) < 0)  cycle   ! high risk wrong way around
@@ -18495,7 +18514,7 @@ use Global
 implicit none
 
 double precision, intent(OUT) :: LLR_Parent(nInd,3), LLR_GP(3, nInd/2, 2)
-integer :: i, CurPar(2), k, m, nonG(6), CurGP(2), s, g
+integer :: i, CurPar(2), k, m, nonG(6), CurGP(2), s, g, t
 double precision :: LLtmp(2,2,2), LLg(7), LLa(7)
 logical :: AllSibsSelfed(2), NoGP, FSM
 
@@ -18505,13 +18524,10 @@ LLR_parent = missing
 LLR_GP = missing
 
 if (quiet<1)  call Rprint("Calculating parental LLR ... ",(/0/), (/0.0D0/), "NON")
+t = 1
 do i = 1, nInd
   if (MODULO(i,100)==0) call rchkusr()
-  if (quiet==-1 .and. nInd>5000) then
-    if (MODULO(i,1000)==0)  call Rprint("", (/i/), (/0.0D0/), "INT")
-  else if (quiet==-1 .and. nInd>500) then
-    if (MODULO(i,200)==0)  call Rprint("", (/i/), (/0.0D0/), "INT")
-  endif  
+  if (quiet==-1 .and. any(viginti==i)) call print_progress(i,t)
   if (skip(i))  cycle
   if (Parent(i,1)==0 .and. Parent(i,2)==0) cycle
 
@@ -19141,7 +19157,7 @@ implicit none
 
 character(len=nchar_filename), intent(IN) :: LifehistFileName
 integer, intent(INOUT) :: BYrange(nInd, 2)
-integer :: k,i,m, numcolLH, nDupLhID, j, ios, dumI(5)
+integer :: k,i,m, numcolLH, ios, dumI(5) 
 integer, allocatable, dimension(:) :: SexLH, ByLH, LyLH
 integer, allocatable, dimension(:,:) :: BYrangeLH
 character(len=nchar_ID), allocatable, dimension(:) :: NameLH
