@@ -72,7 +72,7 @@ module Global_vars
     print '(a)',    '  --only-among <file>  only consider pairs with both individuals listed.',&
                     '                       Can NOT be combined with --only or --only-pairs'
     print '(a)',    '  --only-pairs <file>  only consider listed pairs. Can NOT be combined with',&
-                    '                        --only or --only-among.'
+                    '                        --only or --only-among. No header row.'
     print '(a)',    '  --numeric-IDs   flag to indicate that IDs in --only(-..) files are numeric',&
                     '                       corresponding to the numeric IDs in the .grm.gz file',&
                     '                       (= rownumbers in genotype file). Faster than character IDs.'             
@@ -762,12 +762,14 @@ contains
           i = i+1
           call get_command_argument(i, onlyFile)
           OnlyAmong = .TRUE.
+          DoFilter = .TRUE.
           
         case ('--only-pairs')
           if (onlyFile /= 'nofile')  stop 'please specify ONE of --only, --only-among, --only-pairs'
           i = i+1
           call get_command_argument(i, onlyPairsFile)
           OnlyPairs = .TRUE.
+          DoFilter = .TRUE.
           
         case('--numeric-IDs')
           numeric_IDs = .TRUE.
