@@ -50,7 +50,7 @@ module Global_vars
     print '(a)',    '  --help         print usage information and exit'
     print '(a)',    '  --in <grmfile> input file with GRM; extensions .grm.id and .grm.gz are added' 
     print '(a)',    '  --notgz        input file is .grm (plain text) rather than .grm.gz'
-    print '(a)',    '  --out_prefix <file>  prefix for output files; defaults to <grmfile> '    
+    print '(a)',    '  --out-prefix <file>  prefix for output files; defaults to <grmfile> '    
     print '(a)',    '  --summary-out <file>  output file for summary statistics, default: ', &
                     '                    <grmfile>_summary_stats.txt ' 
    print '(a)',    '   --no-summary   do not calculate various summary statistics, e.g. when GRM is ', &
@@ -543,8 +543,8 @@ program main
     ! add pairs to keep list, for output summary
     keep = .FALSE.
     do x=1,SIZE(pairs_only,2)
-      keep(pairs_only(1,x)) = .TRUE.
-      keep(pairs_only(2,x)) = .TRUE.
+      if (pairs_only(1,x)/=0)  keep(pairs_only(1,x)) = .TRUE.
+      if (pairs_only(2,x)/=0)  keep(pairs_only(2,x)) = .TRUE.
     enddo
   else
     allocate(pairs_only(2,1))
@@ -949,18 +949,19 @@ subroutine ProcessGRM(grmFile, filterFile)
       allocate(indx(2, chunk_size))     
       allocate(nSnp(chunk_size))      
       allocate(IsDiagonal(chunk_size))     
-      allocate(InSubset(chunk_size))    
-      allocate(summary_mask(chunk_size,2,nGroups))
-      
+      allocate(summary_mask(chunk_size,2,nGroups))      
       x = 0
       GRM = -999D0
       indx = 0
       nSnp = 0
       IsDiagonal = .FALSE.
-      InSubset = 0   ! 0 = total; 1 = 1 indiv in --only subset; 2 = both indivs in --only subset; 
-                     ! 3 = pair in --only-pairs 
       summary_mask = .FALSE.
     endif
+    if (any(DoFilter)) then
+      allocate(InSubset(chunk_size))  
+      InSubset = 0   ! 0 = total; 1 = 1 indiv in --only subset; 2 = both indivs in --only subset; 
+                     ! 3 = pair in --only-pairs     
+    endif    
         
     call cpu_time(CurrentTime(1))
     p = 1   ! chunk number
@@ -1183,13 +1184,13 @@ subroutine ReadPairs(FileName)
   implicit none
 
   character(len=nchar_filename), intent(IN) :: FileName
-  integer :: x, i,tmpI(2), IOerr, ncol, k
+  integer :: x, i,tmpI(2), IOerr, ncol, k, nrow
   character(len=nchar_ID) :: tmpC(2)
   ! for sorting pairs in grm order:
   integer, allocatable :: Rank(:), pairs_only_tmp(:,:)
   double precision, allocatable :: pair_dbl(:)  
 
-  n_only_pairs = FileNumRow(trim(FileName))  ! no header
+  nrow = FileNumRow(trim(FileName))  ! no header
   ncol  = FileNumCol(trim(FileName))
   
   if (.not. quiet) then
@@ -1200,13 +1201,14 @@ subroutine ReadPairs(FileName)
     endif
   endif
 
-  allocate(pairs_only(2,n_only_pairs))
+  allocate(pairs_only(2,nrow))
+  n_only_pairs = 0
   pairs_only = 0
 
   ! single column (ignore all other columns)
 !  call printt("Reading individuals in --only file "//trim(FileName)//" ... ")
   open(unit=103, file=trim(FileName), status="old")
-    do x=1, n_only_pairs
+    do x=1, nrow ! n_only_pairs
       if (numeric_IDs) then
         read(103, *,IOSTAT=IOerr)  tmpI
       else
@@ -1216,27 +1218,29 @@ subroutine ReadPairs(FileName)
         print *, "Wrong input in file "//trim(FileName)//" on line ", x
         stop
       endif
-      if (numeric_IDs) then
-        do k=1,2
-          if (tmpI(k) < 1 .or. tmpI(k) > nInd) then
-            print *, 'numeric IDs in --only-pairs file must be between 1 and ', nInd, ', got: ', tmpI(k)
-            stop
-          endif
-        enddo
-        pairs_only(:,x) = tmpI  
-      else
+      if (.not. numeric_IDs) then
+        tmpI = 0
         do k=1,2
           do i=1, nInd
-            if (Id(i) == tmpC(k))  pairs_only(k,x) = i
+            if (Id(i) == tmpC(k)) tmpI(k) = i
           enddo
         enddo
-        if (any(pairs_only(:,x) == 0)) then
-          print *, 'Pair on row ', x, ' of --only-pairs file contains ID(s) not in .grm.id: ', tmpC
-          stop
-        endif
+      endif
+      if (all(tmpI > 0 .and. tmpI <= nInd)) then
+        n_only_pairs = n_only_pairs +1
+        pairs_only(:,n_only_pairs) = tmpI
+      else if (numeric_IDs) then
+        print *, 'numeric IDs in --only-pairs file must be between 1 and ', nInd, ', got: ', tmpI
+        stop
       endif
     enddo
   close(103)
+  
+  if (n_only_pairs == 0) then
+    print *, ''
+    print *, 'Zero genotyped pairs among --only-pairs'
+    stop
+  endif
   
   ! sort pairs_only in same order as they will be encountered in .grm.gz:
   ! 1 1
@@ -1250,14 +1254,14 @@ subroutine ReadPairs(FileName)
       pairs_only(1,x) = tmpI(2)
       pairs_only(2,x) = tmpI(1)
     endif
-  enddo
+  enddo  
   
   allocate(Rank(n_only_pairs))
   Rank = (/ (x, x=1, n_only_pairs, 1) /)  ! vector to be sorted
   ! sorting algorithm uses double precision input
   allocate(pair_dbl(n_only_pairs))
   ! add 2nd ID as fractional element
-  pair_dbl = REAL(pairs_only(1,:), 8) + pairs_only(2,:)/REAL(n_only_pairs,8)    
+  pair_dbl = REAL(pairs_only(1,1:n_only_pairs), 8) + pairs_only(2,1:n_only_pairs)/REAL(n_only_pairs,8)    
   call QsortC(pair_dbl, Rank)
   deallocate(pair_dbl)
   
@@ -1270,7 +1274,7 @@ subroutine ReadPairs(FileName)
 
   if (.not. quiet) then
     call timestamp()
-    print *, 'read ', n_only_pairs ,' pairs from --only-pairs file'
+    print *, 'read ', n_only_pairs ,' pairs from --only-pairs file that are both present in GRM'
   endif
 
 end subroutine ReadPairs
