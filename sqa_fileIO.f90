@@ -23,7 +23,7 @@ contains
     logical :: file_exists
     
     inquire(file=trim(FileName), exist = file_exists)
-    if (.not. file_exists)  stop 'File '//trim(FileName)//' not found!'
+    if (.not. file_exists)  stop 'File not found: '//trim(FileName)
   
   end subroutine checkFile
   
@@ -530,18 +530,21 @@ contains
   function readAF(FileName)  result(AF)
     character(len=*), intent(IN), optional :: FileName
     double precision, allocatable :: AF(:)
-    integer :: l, nCol, nRow, AFcol, k, ios
+    integer :: l, nCol, nRow, AFcol, k, ios, ns
     character(len=50), allocatable :: header(:), tmpC(:)
     
     call CheckFile(FileName)
 
     nCol = FileNumCol(FileName)
     nRow = FileNumRow(FileName)
+    
     if (nCol==1) then
-      allocate(AF(nRow))  ! no header
+      ns = nRow ! no header
     else
-      allocate(AF(nRow -1))  ! with header
+      ns = nRow -1   ! with header
     endif
+    allocate(AF(ns))
+    
     allocate(header(nCol))
     header = 'NA'
     AFcol = 0
@@ -551,7 +554,7 @@ contains
       if (nCol == 1) then
         AFcol = 1
       else
-        read(103,*)  header
+        read(3,*)  header
         do k=1, nCol
           if (header(k) == 'MAF' .or. header(k)=='AF' .or. header(k)=='Frequency') then
             AFcol = k
@@ -561,7 +564,7 @@ contains
       endif
       if (AFcol > 1)  allocate(tmpC(AFcol -1))
       
-      do l=1, nRow
+      do l=1, ns
         if (AFcol == 1) then
           read(3, *,IOSTAT=ios)  AF(l)
         else
@@ -576,6 +579,70 @@ contains
 
   end function readAF
   
+  
+  
+  !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  ! read pedigree file, without dummy individuals etc
+  !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  
+  subroutine read_pedigree_simple(Ped, IDs, FileName, hasHeader) 
+    integer, allocatable, intent(OUT) :: Ped(:,:)
+    character(len=nchar_ID), allocatable, intent(OUT) :: IDs(:)
+    character(len=*), intent(IN) :: FileName
+    logical, intent(IN), optional :: hasHeader   ! default=TRUE
+    logical :: do_read_header
+    character(len=nchar_ID), allocatable :: NamePed(:,:)
+    character(len=nchar_ID) :: tmpC(3)
+    integer :: N, i, j, k, ios
+    
+    call CheckFile(FileName)
+    N = FileNumRow(FileName) 
+    
+    if (present(hasHeader)) then
+      do_read_header = hasHeader
+    else
+      do_read_header = .TRUE.
+    endif
+    if (do_read_header)  N = N-1
+    
+    allocate(IDs(N))
+    allocate(NamePed(2,N))
+    allocate(Ped(2,N))
+    
+    ! read in names from file
+    open(unit=103, file=trim(FileName), status="old")
+      if (do_read_header)  read(103,*)                             
+      do i=1,N
+        read(103, *,IOSTAT=ios)  tmpC
+        call IOstat_handler(ios, i, FileName)
+        IDs(i) = tmpC(1)
+        NamePed(:,i) = tmpC(2:3) 
+      enddo
+    close(103)
+    
+
+    ! transform names to numbers
+    ! this is the slow part, but alternatives using WHERE or so are slower.
+    Ped = 0
+    do i=1,N
+      do k=1,2
+        if (NamePed(k,i) == 'NA') then
+          Ped(k,i) = 0
+        else
+          do j=1,N
+            if (NamePed(k,i) == IDs(j)) then
+              Ped(k,i) = j
+              exit
+            endif         
+          enddo  ! j
+        endif
+      enddo  ! k
+    enddo  ! i
+
+    deallocate(NamePed)
+  
+  end subroutine read_pedigree_simple
+   
   
 end module sqa_fileIO
 
