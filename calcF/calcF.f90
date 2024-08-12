@@ -761,7 +761,7 @@ program main
   character(len=3) :: geno_format
   double precision :: maf_min 
   double precision, allocatable :: Fped(:)
-  character(len=nchar_ID), allocatable :: IDz(:)
+  integer, allocatable :: pedigree_tmp(:,:)
   integer :: i, ig, ip, y
   logical :: pedigree_is_sorted, return_sorted_pedigree
   
@@ -804,21 +804,17 @@ program main
     Ng = 0
   endif  
   
-  
-  
+   
   ! combine pedigree & genomic IDs into single vector 
   ! (first all IDp in order, then any genotyped individuals not in pedigree) 
   call combine_ped_geno()
     
   if (Np>0 .and. return_sorted_pedigree) then
-    allocate(IDz(0:Np))
-    IDz(0) = 'NA'
-    IDz(1:Np) = IDp
     sorted_pedigree_file = pedigree_file(1:(LEN_TRIM(pedigree_file)-4))//'_sorted.txt'    
     open(unit=101, file=trim(sorted_pedigree_file), status='unknown')
       write(101, '(3a20)') 'id', 'dam', 'sire'
       do i=1,Np
-        write(101, '(3a20, i6)')  IDz(i), IDz(pedigree(:,i))
+        write(101, '(3a20, i6)')  IDc(i), IDc(pedigree(:,i))
       enddo
     close(101) 
   endif
@@ -856,8 +852,16 @@ program main
   
 
   ! write output to file
+  if (Ng>0 .and. Np>0) then
+    ! add row 0 to pedigree, to make writing output file easier (for genotyped-only indivs)
+    allocate(pedigree_tmp(2,0:Np))
+    pedigree_tmp(:,0) = 0
+    pedigree_tmp(:,1:Np) = pedigree
+    call move_alloc(pedigree_tmp, pedigree) 
+  endif
+  
   open(unit=101, file=trim(out_file), status='unknown')
-    write(101, '(a2, 40x, 5a12)') 'ID', 'F_ped', 'F_uni_u', 'F_uni_w', 'R_uni_u' !, 'R_uni_w'
+    write(101, '(a2, 40x, 2(a7, 35x), 5a12)') 'ID', 'parent1', 'parent2', 'F_ped', 'F_uni_u', 'F_uni_w', 'R_uni_u' !, 'R_uni_w'
     do i=1,Nc
       ip = 0
       ig = 0
@@ -865,7 +869,7 @@ program main
       do y=1,Ng
         if (IDg(y) == IDc(i)) ig = y 
       enddo   
-      write(101, '(a40, 2x, 5f12.8)')  IDc(i), Fped(ip), F_uni_u(ig), F_uni_w(ig), R_parents(i)
+      write(101, '(3(a40, 2x), 5f12.8)')  IDc(i), IDc(pedigree(:,ip)), Fped(ip), F_uni_u(ig), F_uni_w(ig), R_parents(i)
     enddo
   close(101)
 
@@ -950,31 +954,34 @@ contains
   !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   subroutine combine_ped_geno()
     integer :: i
-    character(len=nchar_ID), allocatable :: IDc_tmp(:) 
+    character(len=nchar_ID), allocatable :: IDc_tmp(:)
   
     if (Ng == 0) then
-      Nc = Np
-      IDc = IDp 
-      return
+      Nc = Np    
     else if (Np == 0) then
       Nc = Ng
-      IDc = IDg
-      return
+    else    
+      Nc = Np  ! total number, combined pedigree + genotype data
+      allocate(IDc_tmp(Np + Ng))   ! maximum Nc: none in pedigree are genotyped
+      IDc_tmp(1:Np) = IDp(1:Np)
+      ! add any genotyped-but-not-in-pedigree individuals
+      do i=1,Ng
+        if (any(IDp == IDg(i)))  cycle
+        Nc = Nc +1
+        IDc_tmp(Nc) = IDg(i)
+      enddo
     endif
     
-    Nc = Np  ! total number, combined pedigree + genotype data
-    allocate(IDc_tmp(Np + Ng))   ! maximum Nc: none in pedigree are genotyped
-    IDc_tmp(1:Np) = IDp(1:Np)
-    ! add any genotyped-but-not-in-pedigree individuals
-    do i=1,Ng
-      if (any(IDp == IDg(i)))  cycle
-      Nc = Nc +1
-      IDc_tmp(Nc) = IDg(i)
-    enddo
-    
-    allocate(IDc(Nc))
-    IDc(1:Nc) = IDc_tmp(1:Nc)
-    deallocate(IDc_tmp)
+    allocate(IDc(0:Nc))
+    IDc(0) = 'NA'
+    if (Ng == 0) then
+      IDc(1:Nc) = IDp
+    else if (Np == 0) then
+      IDc(1:Nc) = IDg 
+    else
+      IDc(1:Nc) = IDc_tmp(1:Nc)
+      deallocate(IDc_tmp)      
+    endif
   
   end subroutine combine_ped_geno
   
