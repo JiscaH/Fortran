@@ -342,7 +342,8 @@ contains
       do l=1, nSnp
         m = 2*(l-1)+1
         Gl = transpose(G_duos(:,m:(m+1)))
-             
+        
+        ! get the 2 alleles at this locus
         a = 0
         do x=1,6
           if (any(Gl == valid_alleles(x))) then
@@ -531,7 +532,7 @@ contains
     character(len=*), intent(IN), optional :: FileName
     double precision, allocatable :: AF(:)
     integer :: l, nCol, nRow, AFcol, k, ios, ns
-    character(len=50), allocatable :: header(:), tmpC(:)
+    character(len=50), allocatable :: header(:), tmpC(:)  
     
     call CheckFile(FileName)
 
@@ -569,6 +570,12 @@ contains
           read(3, *,IOSTAT=ios)  AF(l)
         else
           read(3, *,IOSTAT=ios)  tmpC, AF(l)
+          if (AFcol==5) then  ! output from PLINK --freq
+            ! if minor allele (A1) is not reference allele (first in alphabet) for read_geno: use major allele freq
+            if (tmpC(3) < tmpC(4)) then
+              AF(l) = 1d0 - AF(l)
+            endif        
+          endif
         endif
         call IOstat_handler(ios, l, FileName)
       enddo
