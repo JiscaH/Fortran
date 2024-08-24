@@ -26,7 +26,7 @@ use sqa_general, ONLY: AHWE, OHWE, OcA, AKAP, OKAP, OKOP, AKA2P, OKA2P, &
   timestamp, printt
 implicit none
 
-character(len=*), parameter :: version = 's2.11.1 (24 July 2024)'
+character(len=*), parameter :: version = 's2.11.2 (24 August 2024)'
 integer :: nInd, nSnp, nIndLH, maxSibSize, MaxOppHom, MaxMendelE, MaxMismatchDup, &
   Hermaphrodites, nC(2), nYears, maxAgePO, nPairs, Complx, quiet, AgePhase, BYzero, &
   ID_len, mxCP, viginti(20)
@@ -1222,7 +1222,7 @@ contains
             i = i-1
           endif
           
-        case ('--af', '--maf', '--freq')
+        case ('--af', '--maf', '--freq', '--read-freq')
           i = i+1
           call get_command_argument(i, AF_FileName)
           
@@ -1528,7 +1528,7 @@ contains
 
     ! general prep  ~~~
     if (quiet < 1)  call printt("generating look-up tables with probabilities ... ")
-    AF = getAF(AF_FileName)
+    AF = getAF(AF_FileName, GenoFormat)
     if (erV(1) > TINY(0D0)) then
      OcA = mk_OcA(erV)
     else
@@ -1579,9 +1579,10 @@ contains
     
   end subroutine Initiate
   
-  function getAF(FileName)  result(AF)
+  function getAF(FileName, geno_format)  result(AF)
     use sqa_fileIO, ONLY: readAF, ilong    
     character(len=*), intent(IN) :: FileName
+    character(len=3), intent(IN) :: geno_format
     double precision, allocatable :: AF(:)
     integer :: l
     
@@ -1594,7 +1595,7 @@ contains
       enddo  
     else
       if (quiet ==-1)  call printt("Reading allele frequencies in "//trim(FileName)//" ... ")
-      AF = readAF(FileName)
+      AF = readAF(FileName, geno_format)
     endif
 
   end function getAF

@@ -17,7 +17,7 @@ module global_variables
   use sqa_fileIO, ONLY: ishort, nchar_ID
   implicit none
 
-  character(len=*), parameter :: version = "Version 0.3.7.2 (03 May 2024)"
+  character(len=*), parameter :: version = "Version 0.3.7.3 (24 August 2024)"
   integer, parameter :: chunk_size_large = 100, chunk_size_small=10, nchar_filename=200
   integer :: nIndG, nInd_max, nIndT, nSnp, nMatings, nMat_max
   integer(kind=ishort), allocatable :: Geno(:,:)
@@ -59,10 +59,11 @@ contains
                     '                       RAW: header, 0/1/2/NA, IDs in column 2 of 6 non-SNP columns; .raw', &
                     '                       LMT: no header, 0/1/2 without spacing, IDs in separate file;', &
                     '                        .geno + .id'                 
+    print '(a)',    '  --genoformat <x>      same options as for --informat; sets both in & out format. Default: SEQ' 
     print '(a)',    '  --pedigree <filename>  file with pedigree, with columns id-parent1-parent2.',&
                     '                          Default: Pedigree.txt'
     print '(a)',    '  --method <x>         One of (from most to least fancy):',&
-                    '                         full: use info from all relatives, iterative peeling',& 
+                    '                         full: use info from all relatives, iterative peeling (default)',& 
                     '                         ancestors: use genotypes from ancestors',&
                     '                         parents: use parent genotypes only',&
                     '                         common: set all missing to most common genotype at the SNP',&
@@ -73,7 +74,7 @@ contains
                     '                        (Will be estimated from data in future version)'  
      print '(a)',    '  --errV <3 values>   alternative to --err: P(observed|actual) for',&
                     '                        hom|other hom, het|hom, and hom|het'                
-    print '(a)',    '  --af <filename>      optional input file with allele frequencies; only relevant',&
+    print '(a)',    '  --af, --freq, --read-freq   <filename>    optional input file with allele frequencies; only relevant',&
                     '                        in combination with --min_prob. Either 1 column and no header,',&
                     '                        or multiple columns with a column MAF, AF, or Frequency',&
                     '                        E.g. output from plink --freq.'                     
@@ -1499,7 +1500,7 @@ program main
   
   if (do_pedclean .or. do_snpclean .or. do_impute) then  ! not if do_read_edits
     allocate(AF(nSnp))
-    AF = getAF(AFFile) 
+    AF = getAF(AFFile, GenoInFormat) 
     allocate(OcA(0:2,-1:2))
     if (erV(1) > TINY(0D0)) then
      OcA = mk_OcA(erV)
@@ -1602,6 +1603,15 @@ contains
               stop
             endif
             
+          case ('--genoformat', '--genoFormat')
+            i = i+1
+            call get_command_argument(i, GenoInFormat)
+            if (.not. any(valid_formats == GenoInFormat)) then
+              print *, 'ERROR: informat must be one of: ', trim(paste(valid_formats))
+              stop
+            endif
+            GenoOutFormat = GenoInFormat
+            
           case ('--pedigree', '--ped')  
             i = i+1
             call get_command_argument(i, PedigreeFile)
@@ -1620,7 +1630,7 @@ contains
               if (ErV(z) <= 0.0 .or. ErV(z) > 0.5)  stop 'Genotyping error rates must be >0 and <=0.5'
             enddo           
             
-          case ('--af', '--maf', '--freq')
+          case ('--af', '--freq', '--read-freq')
             i = i+1
             call get_command_argument(i, AFFile)
             
@@ -1828,10 +1838,11 @@ contains
   !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   ! get allele frequencies, from file or calculated 
   !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-  function getAF(FileName)
+  function getAF(FileName, geno_format)
     use sqa_fileIO, ONLY: readAF
     
     character(len=*), intent(IN), optional :: FileName
+    character(len=3), intent(IN) :: geno_format
     double precision :: getAF(nSnp)
     double precision, allocatable :: AF_tmp(:)
     logical :: FromFile
@@ -1849,7 +1860,7 @@ contains
       getAF = calcAF()
     else
       if (.not. quiet) print *, "Reading allele frequencies in "//trim(FileName)//" ..."   
-      AF_tmp = readAF(trim(FileName))
+      AF_tmp = readAF(trim(FileName), geno_format)
       if (SIZE(AF_tmp) /= nSnp) then
         stop "MAF file "//trim(FileName)//" has different number of SNPs than genotype file!"
       else

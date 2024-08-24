@@ -39,3 +39,7 @@ and contains the file input methods shared across several of my other Fortran pr
 ## etc.
 
 To be written. Please run `./calcF --help` to see program options. 
+
+
+> [!CAUTION]  
+> missing values in the `F_uni_.` and `R_uni_u` columns, for non-genotyped individuals / parents, are set to 0.0!

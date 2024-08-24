@@ -48,8 +48,8 @@ contains
                     '                       LMT: no header, 0/1/2 without spacing, IDs in separate file;', &
                     '                        .geno + .id'    
     print '(a)',    '  --maf <x>            filter on minimum allele frequency (default: 0.01)'   
-    print '(a)',    '  --freq, --af <filename>      optional input file with allele frequencies; only relevant',&
-                    '                        in combination with --min_prob. Either 1 column and no header,',&
+    print '(a)',    '  --freq, --af, --read-freq <filename>      optional input file with allele frequencies; ',&
+                    '                        only relevant in combination with --min_prob. Either 1 column and no header,',&
                     '                        or multiple columns with a column MAF, AF, or Frequency',&
                     '                        E.g. output from plink --freq (cannot contain NAs!).'                     
     print '(a)',    '  --out <filename>     output file name. Default: inbreeding_coefficients.txt'
@@ -61,10 +61,11 @@ contains
   !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   ! get allele frequencies, from separate file or estimated from data
   !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-  function getAF(FileName)
+  function getAF(FileName, geno_format)
     use sqa_fileIO, ONLY: readAF
     
     character(len=*), intent(IN), optional :: FileName
+    character(len=3), intent(IN) :: geno_format
     double precision :: getAF(nSnp)
     double precision, allocatable :: AF_tmp(:)
     logical :: FromFile
@@ -80,7 +81,7 @@ contains
     if (FromFile) then  
       
       if (.not. quiet) print *, "Reading allele frequencies in "//trim(FileName)//" ..."   
-      AF_tmp = readAF(trim(FileName))
+      AF_tmp = readAF(trim(FileName), geno_format)
       if (SIZE(AF_tmp) /= nSnp) then
         stop "MAF file "//trim(FileName)//" has different number of SNPs than genotype file!"
       else
@@ -93,7 +94,7 @@ contains
       getAF = calcAF()   
     
     endif
-
+    
   end function getAF
   
   !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -823,10 +824,10 @@ program main
   ! calculate pedigree inbreeding coefficients
   allocate(Fped(0:Np))
   if (Np > 0) then
-    if (.not. quiet)  call printt('calculating inbreeding coefficients...')
+    if (.not. quiet)  call printt('calculating pedigree inbreeding coefficients...')
     Fped = F_meuwissen(pedigree)  
-    call timestamp()
-    write(*, '("Number of inbred animals in pedigree: ", i8)')  count(Fped > 0.000001d0)
+    if (.not. quiet)  call timestamp()
+    if (.not. quiet)  write(*, '("Number of inbred animals in pedigree: ", i8)')  count(Fped > 0.000001d0)
   else
     Fped = 0d0
   endif
@@ -838,8 +839,9 @@ program main
   F_uni_u = 0d0
   F_uni_w = 0d0
   if (Ng > 0) then
-    p = getAF(af_file) 
-    call calc_Funi(maf_min)   ! TODO: return 0:N not 1:N
+    p = getAF(af_file, geno_format)
+    if (.not. quiet)  call printt('calculating genomic inbreeding coefficients...')    
+    call calc_Funi(maf_min)  
   endif
   
   write(*, '("MAF >= ", f6.4, "  # SNPs: ", i10)') maf_min, COUNT(p >= maf_min)

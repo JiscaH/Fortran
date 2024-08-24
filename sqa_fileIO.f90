@@ -528,11 +528,13 @@ contains
   !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   ! read allele frequency file
   !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-  function readAF(FileName)  result(AF)
-    character(len=*), intent(IN), optional :: FileName
+  function readAF(FileName, GenoFormat)  result(AF)
+    character(len=*), intent(IN) :: FileName
+    character(len=3), intent(IN), optional :: GenoFormat
     double precision, allocatable :: AF(:)
     integer :: l, nCol, nRow, AFcol, k, ios, ns
     character(len=50), allocatable :: header(:), tmpC(:)  
+    logical :: minor_to_ref
     
     call CheckFile(FileName)
 
@@ -545,6 +547,11 @@ contains
       ns = nRow -1   ! with header
     endif
     allocate(AF(ns))
+    
+    minor_to_ref = .FALSE.
+    if (present(GenoFormat)) then
+      if (GenoFormat == 'PED')  minor_to_ref = .TRUE.
+    endif
     
     allocate(header(nCol))
     header = 'NA'
@@ -570,8 +577,9 @@ contains
           read(3, *,IOSTAT=ios)  AF(l)
         else
           read(3, *,IOSTAT=ios)  tmpC, AF(l)
-          if (AFcol==5) then  ! output from PLINK --freq
-            ! if minor allele (A1) is not reference allele (first in alphabet) for read_geno: use major allele freq
+          if (AFcol==5 .and. minor_to_ref) then  ! output from PLINK --freq
+            ! if minor allele (A1) is not reference allele (first in alphabet) 
+            ! for read_geno ped/fam: use major allele freq
             if (tmpC(3) < tmpC(4)) then
               AF(l) = 1d0 - AF(l)
             endif        
