@@ -107,6 +107,22 @@ contains
     print '(a)',    '  --quiet              suppress all messages'
   end subroutine print_help
   
+  
+  subroutine Erstop(message, bug)
+    character(len=*), intent(IN) :: message
+    logical, intent(IN) :: bug
+    ! Error = 1
+     call DeAllocAll
+     !call rexit("  ERROR! ***"//message//"***")
+    print *, ""
+    print *, " *** ERROR! ***"
+    print *, message
+    print *, ""
+    if (bug)  print *, "Please report bug"
+    print *, ""
+    stop 'error'   ! String of no more that 5 digits or a character constant 
+  end subroutine Erstop
+  
 end module global_variables 
 
 !===============================================================================
@@ -260,7 +276,9 @@ contains
       if (i == nIndT +1) then
         nIndT = nIndT +1
       else if (i > nIndT) then
-        stop 'pop_add: invalid index'
+        print *, '!!!!!!!'
+        print *, 'pop_add: invalid index'
+        stop 
       endif
       
       pop(i) = ind_new
@@ -373,9 +391,9 @@ contains
     integer, intent(IN) :: fcl_i, p  ! p=supposed sex
     integer :: cur_sex
     
-    if (.not. any((/1,2/) == p))  stop 'set_sex: p must be 1 (dam) or 2 (sire)'   
+    if (.not. any((/1,2/) == p))  call Erstop('set_sex: p must be 1 (dam) or 2 (sire)', .TRUE.)   
     cur_sex = pop(fcl_i)%sex
-    if (any((/1,2/) == cur_sex) .and. p/=cur_sex)  stop 'set_par: parent sex does not match p'
+    if (any((/1,2/) == cur_sex) .and. p/=cur_sex)  call Erstop('set_par: parent sex does not match p', .TRUE.)
     if (cur_sex==3)  pop(fcl_i)%sex = p    
   end subroutine set_sex   
 
@@ -391,21 +409,21 @@ contains
     logical :: pair_exists
 
     if (par_i == 0) then
-      if (.not. present(p))  stop 'set_par: if par_i is 0, p must be provided'
+      if (.not. present(p))  call ErStop('set_par: if par_i is 0, p must be provided', .TRUE.)
       pp = p
     else 
       par_sex = pop(par_i)%sex 
       ! check if sex matches
       if (present(p)) then
-        if (any((/1,2/) == par_sex) .and. p/=par_sex)  stop 'set_par: parent sex does not match p'
+        if (any((/1,2/) == par_sex) .and. p/=par_sex)    call ErStop('set_par: parent sex does not match p', .TRUE.)
         pp = p
         if (par_sex==3)  pop(par_i)%sex = p
       else
-        if (.not. any((/1,2/) == par_sex))  stop 'set_par: parent sex must be 1 or 2, or p provided'
+        if (.not. any((/1,2/) == par_sex))  call ErStop('set_par: parent sex must be 1 or 2, or p provided', .TRUE.)
         pp = par_sex
       endif
     endif
-    if (.not. any((/1,2/) == pp))  stop 'set_par: p must be 1 (dam) or 2 (sire)'
+    if (.not. any((/1,2/) == pp))  call ErStop('set_par: p must be 1 (dam) or 2 (sire)', .TRUE.)
        
 !    m_old = pop(fcl_i)%parent_m
     m_old = indiv2mating(fcl_i)
@@ -1620,7 +1638,7 @@ contains
             i = i+1
             call get_command_argument(i, argOption)
             read(argOption, *)  Er   
-            if (Er <= 0.0 .or. Er > 0.5)  stop 'please provide a genotyping error rate --err >0 and <=0.5'        
+            if (Er <= 0.0 .or. Er > 0.5)  call ErStop('please provide a genotyping error rate --err >0 and <=0.5', .FALSE.)        
 
           case ('--errV')
             do z=1,3
@@ -1639,7 +1657,7 @@ contains
             call get_command_argument(i, argOption)
             read(argOption, *)  Threshold_pedclean
             if (Threshold_Pedclean < 0.0 .or. Threshold_pedclean > 1.0) then
-              stop '--T-pedclean must be between 0 and 1, inclusive'
+              call ErStop('--T-pedclean must be between 0 and 1, inclusive', .FALSE.)
             endif
             
           case ('--no-pedclean')
@@ -1650,7 +1668,7 @@ contains
             call get_command_argument(i, argOption)
             read(argOption, *)  Threshold_snpclean
             if (Threshold_snpclean < 0.0 .or. Threshold_snpclean > 1.0) then
-              stop '--T-snpclean must be between 0 and 1, inclusive'
+              call ErStop('--T-snpclean must be between 0 and 1, inclusive', .FALSE.)
             endif
             
           case ('--no-snpclean')
@@ -1661,7 +1679,7 @@ contains
             call get_command_argument(i, argOption)
             read(argOption, *)  Threshold_impute
             if (Threshold_impute < 0.0 .or. Threshold_impute > 1.0) then
-              stop '--T-impute must be between 0 and 1, inclusive'
+              call ErStop('--T-impute must be between 0 and 1, inclusive', .FALSE.)
             endif
           
           case ('--no-impute')
@@ -1688,7 +1706,7 @@ contains
             i = i+1
             call get_command_argument(i, imp_default)
             if (.not. any((/'het','hom','com'/) == imp_default)) then
-              stop '--when-in-doubt must be one of "het", "hom", "com"'
+              call ErStop('--when-in-doubt must be one of "het", "hom", "com"', .FALSE.)
             endif
             
           case ('--tol')
@@ -1762,7 +1780,7 @@ contains
     endif
     
     if (.not. with_log .and. .not. do_geno_out) then
-      stop 'It does not seem wise to combine --no-geno-out with --no-edits-out'
+      call ErStop('It does not seem wise to combine --no-geno-out with --no-edits-out', .FALSE.)
     endif
     
     ! check if valid filename
@@ -1771,7 +1789,7 @@ contains
     do i=1,5
       if (FN(i) == 'NoFile')  cycle
       if (len_trim(FN(i))==0) then
-        stop 'Filename for '//trim(FN_lbls(i))//' may not be blank'
+        call ErStop('Filename for '//trim(FN_lbls(i))//' may not be blank', .FALSE.)
       endif
     enddo
     
@@ -1862,7 +1880,7 @@ contains
       if (.not. quiet) print *, "Reading allele frequencies in "//trim(FileName)//" ..."   
       AF_tmp = readAF(trim(FileName), geno_format)
       if (SIZE(AF_tmp) /= nSnp) then
-        stop "MAF file "//trim(FileName)//" has different number of SNPs than genotype file!"
+        call ErStop("MAF file "//trim(FileName)//" has different number of SNPs than genotype file!", .FALSE.)
       else
         getAF = AF_tmp
         deallocate(AF_tmp)
