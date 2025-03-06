@@ -23,7 +23,10 @@ contains
     logical :: file_exists
     
     inquire(file=trim(FileName), exist = file_exists)
-    if (.not. file_exists)  stop 'File not found: '//trim(FileName)
+    if (.not. file_exists) then
+      print *, 'File not found: ', trim(FileName)
+      stop
+    endif
   
   end subroutine checkFile
   
@@ -187,7 +190,8 @@ contains
     if (current_ext == '000') then  ! filename without extension provided
       Name_with_ext = trim(FileName)//'.'//trim(format_ext)
     else if (current_ext /= format_ext) then
-      stop "Genotype file extension ."//current_ext//" not consistent with genotype format"
+      print *, "Genotype file extension ."//current_ext//" not consistent with genotype format"
+      stop 
     else
       Name_with_ext = FileName
     endif  
@@ -401,6 +405,8 @@ contains
     GenoFile = add_extension(FileName, FileFormat)
      
     allocate(G_char(nSnp))   ! if (FileFormat == 'RAW')   uses NA for missing values
+    allocate(G_int(nSnp))
+    G_int = -9
     
     if (present(make_map)) then
       do_make_map = make_map
@@ -425,7 +431,7 @@ contains
     endif
     
     did_warn = .FALSE.
-
+    
     open (unit=202, file=trim(GenoFile), status='unknown', action='write')
       if (FileFormat=='RAW') then   ! header
         write (202,'(a4,2x,a3,37x,3a5, a6, 2x, 200000a25)') 'FID', 'IID', 'PAT', &
