@@ -6,6 +6,9 @@
 !
 ! This code is available under GNU General Public License v3
 !
+! --method full is an implementation of Kerr & Kinghorn, J. Anim. Breed. Genet., 1996
+
+!
 ! Compilation: 
 ! gfortran -O3 sqa_general.f90 sqa_fileIO.f90 Imputator.f90 -o imputator
 ! debug:
@@ -17,7 +20,7 @@ module global_variables
   use sqa_fileIO, ONLY: ishort, nchar_ID
   implicit none
 
-  character(len=*), parameter :: version = "Version 0.3.7.3 (24 August 2024)"
+  character(len=*), parameter :: version = "Version 0.4 (22 May 2025)"
   integer, parameter :: chunk_size_large = 100, chunk_size_small=10, nchar_filename=200
   integer :: nIndG, nInd_max, nIndT, nSnp, nMatings, nMat_max
   integer(kind=ishort), allocatable :: Geno(:,:)
@@ -35,7 +38,8 @@ module global_variables
     integer :: sex=3  ! 1=female, 2=male, 3=unknown, 4=hermaphrodite
 !    integer :: parent_m = 0  !  matingnode with its parents
     integer, dimension(:), pointer :: offspring_m => null()  ! matingnodes with its offspring
-    ! TODO: birth year 
+    ! TODO?: birth year 
+    !logical :: skip=.FALSE.   ! only used with --edits-in
   end type individual
   
   type matingnode
@@ -104,6 +108,7 @@ contains
     print '(a)',    '  --edits-out <filename>  file name for list with edits. Default: imputation_edits.txt'
     print '(a)',    '  --no-edits-out       no file with list with edits (faster)'    
     print '(a)',    '  --edits-in <filename>   edits file as input'
+    print '(a)',    '  --only-apply-edits   shorthand for --no-pedigree --no-pedclean --no-impute'
     print '(a)',    '  --quiet              suppress all messages'
   end subroutine print_help
   
@@ -123,6 +128,23 @@ contains
     stop 'error'   ! String of no more that 5 digits or a character constant 
   end subroutine Erstop
   
+  
+  ! create a sequence from 1 to n, with length equal to n_steps (used for progress bar)
+  function mk_seq(n, n_steps) result(seq) 
+    integer, intent(IN) :: n, n_steps
+    integer, allocatable :: seq(:)
+    integer :: i
+    real, allocatable :: probs(:)
+    
+    allocate(probs(n_steps))
+    allocate(seq(n_steps))
+    
+    probs = (/ (i,i=1,n_steps) /) / real(n_steps)
+    seq = NINT( probs * n )
+    WHERE (seq == 0)  seq = 1
+    WHERE (seq >  n)  seq = n   
+  end function mk_seq
+  
 end module global_variables 
 
 !===============================================================================
@@ -131,12 +153,13 @@ end module global_variables
 module pedigree_fun
   ! TODO: separate source file
   use global_variables, ONLY: nchar_ID, nIndG, nIndT, nInd_max, nMatings, individual, IdV, &
-    chunk_size_small, chunk_size_large, nMat_max, matingnode, indiv2mating  ! , mating2parent
+    chunk_size_small, chunk_size_large, nMat_max, matingnode, indiv2mating, Erstop  ! , mating2parent
   implicit none
   
   type(individual), allocatable, target :: pop(:)  
   type(matingnode), allocatable, target :: pedigree(:)
   integer, allocatable, public :: ped_array(:,:)
+  integer, parameter :: no_index=-999
   
 contains
   !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -181,7 +204,6 @@ contains
     character(len=*), intent(IN) :: FileName
     logical, intent(IN) :: incl_non_genotyped, do_impute_all
     integer :: i,x,k, ios, nIndP, par_i, r, nInd_R(3)
-    integer, parameter :: no_index=-999
     character(len=nchar_ID), allocatable :: names_pedigree(:,:)   
                                            
     call CheckFile(FileName)    
@@ -228,40 +250,7 @@ contains
     deallocate(names_pedigree)
   
                        
-  contains
-    !~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    ! get pedigree index (=genotype row number, if any) for a specific ID
-    pure function get_index(this_ID)
-      integer :: get_index
-      character(len=nchar_id), intent(IN) :: this_ID
-      integer :: i
-      
-      get_index = no_index
-      if (this_ID == 'NA' .or. this_ID=='0') then
-        get_index = 0
-        
-      else if (any(IdV == this_ID)) then
-        do i=1,nIndG
-          if (IdV(i)==this_ID) then
-            get_index = i
-            return
-          endif
-        enddo
-      
-      else if (any(pop%ID == this_id)) then    
-        do i=nIndG+1, nIndT
-          if (pop(i)%ID == this_ID) then
-            get_index = i
-            return
-          endif
-        enddo 
-        
-      else
-        return       
-      endif
-      
-    end function get_index
-    
+  contains  
     !~~~~~~~~~~~~~~~~~~~~~~~~~~~
     ! add new individual to the population
     subroutine pop_add(ind_new)
@@ -307,6 +296,36 @@ contains
   end subroutine read_pedigree
   
   !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  ! get pedigree index (=genotype row number, if any) for a specific ID
+  !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  pure function get_index(this_ID)
+    integer :: get_index
+    character(len=nchar_id), intent(IN) :: this_ID
+    integer :: i
+    
+    get_index = no_index
+    if (this_ID == 'NA' .or. this_ID=='0') then
+      get_index = 0
+      
+    else !if (any(IdV == this_ID)) then   
+      do i=1,nIndG
+        if (IdV(i)==this_ID) then
+          get_index = i
+          return
+        endif
+      enddo
+    endif
+    
+    do i=nIndG+1, nIndT
+      if (pop(i)%ID == this_ID) then
+        get_index = i
+        return
+      endif
+    enddo 
+    
+  end function get_index
+  
+  !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   ! initialise pedigree & indiv2mating arrays
   !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   subroutine init_pedigree()
@@ -326,7 +345,7 @@ contains
     endif
     
     nMatings = 0  
-    do i=1, nIndG
+    do i=1, nIndT
       par = ped_array(:,i)
       if (all(par==0))  cycle  ! mating=0
       if (any(par==0)) then    ! always unique mating
@@ -539,6 +558,21 @@ contains
   
   ! no other getters: big decrease in runtime
   
+  !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  ! for individual with index fcl_i, get all offspring
+  !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    ! pure function get_offspring(fcl_i) result(offspring)
+      ! integer, intent(IN) :: fcl_i
+      ! integer, pointer :: offspring(:), mates(:)
+      ! integer :: k
+      
+      ! mates => pop(fcl_i)%offspring_m 
+      ! do k=1,SIZE(mates)         
+        ! offspring => pedigree(mates(k))%offspring 
+      ! enddo
+
+    ! end function get_offspring
+  
     
   
   ! !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -599,6 +633,7 @@ contains
   subroutine init_pairLL
     ! calculate likelihoods for: self, PO, FS, HS/GP/FA, HA/3rd, U
     ! store in look-up table: G_IID1 (-1/0/1/2) + G_IID2 (-1/0/1/2)
+    ! used by clean_pedigree() (via R_probs())
 
     ! when not conditioning on parents of both individuals, LL(FA)=LL(GP)=LL(HS),
     ! and similarly all 3rd degree relationships have same LL (log likelihood)
@@ -676,12 +711,12 @@ contains
   !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   ! find & remove low-probability parent-offspring links in the pedigree
   !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-  subroutine clean_pedigree(EditsFileName, Threshold)
+  subroutine clean_pedigree(PedigreeEditsFile, Threshold)
     ! NOTE: only checking genotyped-genotyped parent-offspring pairs
     use global_variables, ONLY : nIndG
     use pedigree_fun, ONLY: pop, get_par, set_par
     
-    character(len=*), intent(IN) :: EditsFileName
+    character(len=*), intent(IN) :: PedigreeEditsFile
     real, intent(IN) :: Threshold
     integer :: i, k, par(2)
     double precision :: probs_ip(nRel)
@@ -689,7 +724,7 @@ contains
     call init_pairLL()
     
     ! write to log which links have been removed, with R_probs
-    open(42, file=trim(EditsFileName), status='unknown', action='write')
+    open(42, file=trim(PedigreeEditsFile), status='unknown', action='write')
       write(42, '(2a40, a12, 6(5X, a7))') 'id', 'parent_id', 'parent_sex', &
         'prob_S ', 'prob_PO', 'prob_FS', 'prob_GP', 'prob_HA', 'prob_UU'
       do i=1,nIndG  
@@ -841,33 +876,44 @@ module impute_fun
 
   logical, public :: do_snpclean, do_impute, do_geno_out, do_probs_out, &
     do_impute_all, with_log
-  real, public :: Threshold_snpclean, Threshold_impute
+  real, public :: Threshold_impute
   double precision, public :: tol
   character(len=3), public :: imp_default
   character(len=10), public ::  method
-  double precision, parameter, private :: doubt_threshold = 0.49 !log(1d0/3) !0.49  
+  double precision, parameter :: doubt_threshold = log(0.49d0) !log(1d0/3) !0.49  
   ! if two genotypes have prob > doubt_threshold, impute as --when-in-doubt
-  integer, parameter, private :: unit_log = 4   ! unit to which logfile is written
+  integer, parameter :: log_unit =4   ! unit to which logfile is written
+  integer, parameter :: editsIN_unit=9   ! unit from which 'old' edits are read
   double precision, allocatable :: Gprob(:,:), Gprob_prev(:,:)
   ! for prob_ant_post
   integer(kind=ishort), allocatable :: Gl(:)   ! genotypes at SNP l
   double precision, allocatable :: lp_ant(:,:), lp_post(:,:,:)  ! log-probabilities
   double precision :: lAHWE(0:2)
+  integer, allocatable :: n_edits_IN(:), editsIN_IDs(:) 
+  logical, allocatable :: skip(:), skipm(:)
   
-public :: clean_n_impute, apply_edits
+public :: clean_n_impute!, apply_edits
 
 contains
 
   !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   ! snp cleaning & imputation across all SNPs
   !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-  subroutine clean_n_impute(EditsFile)  
+  subroutine clean_n_impute(EditsFile, EditsFile_IN)  
     use sqa_general, ONLY: printt
+    use sqa_fileIO,  ONLY: FileNumCol
+    use pedigree_fun,ONLY: get_index   ! DEBUG
+    use global_variables, ONLY: mk_seq
 
-    character(len=*), intent(IN) :: EditsFile
-    integer :: l,x
+    character(len=*), intent(IN) :: EditsFile, EditsFile_IN      ! writes to EditsFile 
+    integer :: l,x, readin_mode, ncol_edits, chunk_printdot(20)
     character(len=20) :: nIndT_char
     character(len=500), allocatable :: fmt_gprob_header, fmt_gprob_data
+    logical :: do_read_edits
+    double precision :: lp_err(0:2)  ! threshold used by clean_snp()
+    real :: snpclean_thresholds(0:2)
+    
+    do_read_edits = EditsFile_IN /= 'NoFile'
        
     ! allocate once & re-use for each SNP
     allocate(Gprob(0:2,1:nIndT)) 
@@ -886,16 +932,50 @@ contains
     endif
     
     if (with_log .and. (do_snpclean .or. do_impute)) then
-      open(unit=unit_log, file=trim(EditsFile))
-      write(unit_log, '(2(a9,2x),31x,3(a9,2x),29x, 2(a5,2x),3a9,2x)', advance='no') &
+      open(unit=log_unit, file=trim(EditsFile))
+      write(log_unit, '(2(a9,2x),31x,3(a9,2x),29x, 2(a5,2x),3(a7,3x),2x)', advance='no') &
         'snp_index', 'snp_name', 'threshold', 'id_index', 'id_name', &
         'g_in', 'g_out', 'prob_0', 'prob_1', 'prob_2'        
       if (method=='full') then
-        write(unit_log, '(2(3a9,2x))')  'p_ant_0', 'p_ant_1', 'p_ant_2', 'p_post_0', 'p_post_1', 'p_post_2'
+        write(log_unit, '(2(3(a8,2x),2x))')  'p_ant_0', 'p_ant_1', 'p_ant_2', 'p_post_0', 'p_post_1', 'p_post_2'
       else
-        write(unit_log, *)   ! line break
+        write(log_unit, *)   ! line break
       endif         
     endif
+    
+    allocate(skip(0:nIndT))
+    allocate(skipm(0:nMatings))
+    allocate(n_edits_in(nSnp))  
+    n_edits_in = 0 
+    if (do_read_edits) then   ! file opened & closed by program main 
+      if (.not. quiet)  call printt('reading edits file ...')
+      
+      ! get # edits per SNP + IDs
+      ! number of edits per SNP =no. rows in file to read when looping through SNPs
+       
+      allocate(editsIN_IDs(nIndT))
+      editsIN_IDs = 0
+      call prelim_read_edits(EditsFile_IN)
+    endif
+      
+    if (do_read_edits .and. sum(n_edits_in) > 0) then 
+      call set_skip()
+      if (.not. quiet)  print *, 'Number of not-skipped individuals: ', COUNT(.not. skip)
+           
+      ncol_edits = FileNumCol(editsFile_IN)
+      if (ncol_edits==16 .and. (method=='ancestors' .or. method=='full')) then
+        readin_mode = 2   ! also read in anterior probabilites from file
+      else
+        readin_mode = 1
+      endif
+
+      ! leave file open, and read from it for each SNP separately
+      open(unit=editsIN_unit, file=EditsFile_IN, action='read')
+      read(editsIN_unit, *)   ! header
+    else
+      skip = .FALSE.
+      skipm = .FALSE.
+    endif  
     
     if (do_impute_all)  call grow_geno()  ! add empty rows to genotype matrix for non-genotyped individuals
     
@@ -904,17 +984,39 @@ contains
       call calc_Gens()
     endif
     
+    if (do_snpclean) then   
+      call calc_snpclean_threshold()
+    endif
+    
     if (.not. quiet) call printt('cleaning and/or imputing genotype data... ')
+           
+    ! for printing 'progress bar'
+    if (.not. quiet) then
+      chunk_printdot =  mk_seq(nSnp, 20)
+      write(*,'(2x,a1, a20, a1)') '|', repeat('-', 20), '|'
+      write(*, '(2x, a1)', advance='no') '|'
+    endif
     
     do l=1, nSnp 
-      if (.not. quiet .and. mod(l,500)==0) call printt(text='l=', int=l)  ! write(*,'(i5, 2x)', advance='no') l
-      ! only first iteration, if looping over several thresholds:
-      Gl = Geno(:,l) 
-      Gprob = 0D0
+      !if (.not. quiet .and. mod(l,500)==0) call printt(text='l=', int=l)
+      if (.not. quiet .and. any(chunk_printdot==l)) write(*,'(a1)', advance='no')  '.'    
+      !write(*,'(i5, 2x)', advance='no') l   ! DEBUG
+
+      ! only first iteration, if looping over several thresholds:  (TODO, not yet implemented)
+      Gl = -1
+      Gl(0:nIndG) = Geno(:,l)       
+      Gprob = 0D0     
+      if (method=='ancestors' .or. method=='full') then
+        call init_ant(l)
+        lp_post = log(1d0/3)
+      endif
+
+      if (do_read_edits .and. n_edits_in(l)>0) then
+        call read_editlog(l, editsIN_unit, readin_mode)  
+      endif
       
       if (method=='common' .or. method=='hom' .or. method=='het')  call set_gprob_to_gfreq(l)
-      if (method=='parents')   call swift_impute(l)
-      if (method=='ancestors' .or. method=='full')  call init_gprobs(l)
+      if (method=='parents')   call swift_impute(l)       
       if (method=='ancestors') call quick_set_ant()
       if (method=='full')      call peeler(tol)
 
@@ -926,17 +1028,21 @@ contains
      
       ! remove genotyping errors
       if (do_snpclean) then
-        call clean_snp(l, Threshold_snpclean)
+        call clean_snp(l)
         call peeler(tol)
-      endif     
+      endif          
       
       ! impute
       if (do_impute)  call impute_snp(l, Threshold_impute)
-      if (do_geno_out)  Geno(:,l) = Gl
+      if (do_geno_out)  Geno(:,l) = Gl(0:nIndG)
       
     enddo
+    
+    if (.not. quiet)  write(*,'(a1)') '|'  ! EOL for progress bar
+    
     if (do_probs_out)  close(3)
-    if (with_log .and. (do_snpclean .or. do_impute))  close(unit_log) 
+    if (with_log .and. (do_snpclean .or. do_impute))  close(log_unit)
+    if (do_read_edits)  close(editsIN_unit)
     
     deallocate(Gprob_prev) 
     deallocate(Gprob)
@@ -952,46 +1058,52 @@ contains
     !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     ! initialise arrays
     !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    subroutine init_gprobs(l)
+    subroutine init_ant(l)  
       integer, intent(IN) :: l  ! SNP number
-      integer :: i,m,x, par(2)
+      integer :: i
       double precision :: lOHWE(0:2,-1:2)
       
-      lAHWE = log(AHWE(:,l))
+      lAHWE = log(AHWE(:,l))  
+      forall (x=0:2)  lOHWE(x,:) = lAHWE(x) + lOcA(x,:)      
+      do i=0,nIndT
+        lp_ant(:,i) = lOHWE(:,Gl(i))   
+      enddo
       
-      forall (x=0:2)  lOHWE(x,:) = lAHWE(x) + lOcA(x,:)
-      forall (x=-1:2) lOHWE(:,x) = logScale(lOHWE(:,x))      
-      forall (i=0:nIndT) lp_ant(:,i)   = lOHWE(:,Gl(i))     
-      do m=0, nMatings
-        par = pedigree(m)%parent
-        forall (i=1:2)  lp_post(:,i,m) = lOHWE(:,Gl(par(i)))
-      enddo  
-      
-    end subroutine init_gprobs
+    end subroutine init_ant
     
     !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    ! set genotypes with Gprob <= Threshold to missing
+    ! calc thresholds to decide if genotyping error or not
     !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    subroutine clean_snp(l, Threshold)
+    subroutine calc_snpclean_threshold()
+      integer :: x
+      double precision :: p_not_err
+
+      do x=0,2
+        p_not_err = OcA(x,x) / SUM(OcA(x,0:2))  ! d2=actual, sums to 1; d1=observed, does not sum to 1 
+        lp_err(x) = log(1-p_not_err)
+      enddo
+      snpclean_thresholds = REAL( exp(lp_err) )  ! used for writing to logfile only
+    end subroutine calc_snpclean_threshold   
+    
+    !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    ! set genotypes with Gprob <= error-based threshold
+    !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    subroutine clean_snp(l)
       integer, intent(IN) :: l
-      real, intent(IN) :: Threshold
-      integer :: i!,x
+      integer :: i
       integer(kind=ishort) :: g_new
-      double precision :: p_not_err, lp_err
-        
-      p_not_err = (OcA(0,0) + OcA(1,1) + OcA(2,2))/3d0
-      lp_err = log(1-p_not_err)
+
       do i=1,nIndG
-        if (Gl(i) == -1)  cycle          
-        if (Gprob(Gl(i),i) < lp_err) then  !log(Threshold))  then  
+        if (Gl(i) == -1)  cycle   
+        if (skip(i))  cycle
+        if (Gprob(Gl(i),i) < lp_err(Gl(i))) then  !log(Threshold))  then  
           ! DO NOT EXLUDE SELF: else doesn't resolve whether parent or offspring
           ! is more likely to have error when they conflict. 
           g_new = -1
-          if (with_log)  call write_log(l, i, g_new, Threshold)
+          if (with_log)  call write_editlog(l, i, g_new, snpclean_thresholds(Gl(i)))
           Gl(i) = g_new         
         endif       
-      enddo
-    
+      enddo   
     end subroutine clean_snp 
     
     !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1037,14 +1149,31 @@ contains
   !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   subroutine swift_impute(l)
     integer, intent(IN) :: l
-    double precision :: lAKO2P(0:2,-1:2,-1:2)
+    double precision :: lAKO2P(0:2,-1:2,-1:2), Gprob_editsIN(3)
     integer :: i
+    logical :: with_editsIN
   
     call mk_AKO2P(l)
-    do i=1, nIndG
-      if (Gl(i)/=-1)  cycle  ! skip if not missing
-      Gprob(:,i) = lAKO2P(:, Gl(ped_array(1,i)), Gl(ped_array(2,i)) )
-    enddo
+  
+    with_editsIN = any(Gprob /= 0d0)
+    
+    if (.not. with_editsIN) then
+      do i=1, nIndG
+        if (Gl(i)/=-1)  cycle  ! skip if not missing
+        Gprob(:,i) = lAKO2P(:, Gl(ped_array(1,i)), Gl(ped_array(2,i)) )
+      enddo   
+    else 
+      Gprob_editsIN = 0d0   
+      do i=1, nIndG
+        if (Gl(i)/=-1)  cycle  ! skip if not missing
+        if (any(Gprob(:,i)/=0))  Gprob_editsIN = Gprob(:,i)
+        Gprob(:,i) = lAKO2P(:, Gl(ped_array(1,i)), Gl(ped_array(2,i)) )
+        if (MAXVAL(Gprob_editsIN) > MAXVAL(Gprob(:,i))) then
+          Gprob(:,i) = Gprob_editsIN
+        endif
+      enddo
+    endif
+
         
   contains
     subroutine mk_AKO2P(l) 
@@ -1119,6 +1248,7 @@ contains
   subroutine impute_snp(l, Threshold)
     integer, intent(IN) :: l
     real, intent(IN) :: Threshold 
+    real :: log_threshold
     integer :: i
     integer(kind=ishort) :: g_new, g_common
     
@@ -1127,9 +1257,11 @@ contains
       g_common = MAXLOC( G_freq(l), DIM=1, KIND=ishort) -1_ishort
     endif
     
+    log_threshold=log(threshold)   ! calc 1x
+    
     do i=1,nIndG
       if (Gl(i) /= -1)  cycle
-      if (ALL(Gprob(:,i) < log(Threshold)))  cycle
+      if (ALL(Gprob(:,i) < log_threshold))  cycle
       if (COUNT(Gprob(:,i) >= doubt_threshold) > 1 .or. method=='hom' .or. method=='het') then    
         select case (imp_default)
           case ('het')  
@@ -1146,7 +1278,7 @@ contains
       else 
         g_new = MAXLOC(Gprob(:,i), DIM=1, KIND=ishort) -1_ishort
       endif
-      if (with_log)  call write_log(l,i,g_new, Threshold)
+      if (with_log)  call write_editlog(l,i,g_new, Threshold)
       Gl(i) = g_new
     enddo  
   
@@ -1156,20 +1288,175 @@ contains
   !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   ! write edit (clean or impute) to log file 
   !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-  subroutine write_log(l, i, g_new, Threshold)
+  subroutine write_editlog(l, i, g_new, Threshold)
     integer, intent(IN) :: l, i
     integer(kind=ishort), intent(IN) :: g_new
     real, intent(IN) :: Threshold
+    double precision :: prob_i(3)
     
-    write(unit_log, '(i9,2x,a40,2x,f9.5,2x,i9,2x,a40,2(i5,2x), 3f9.5,2x)', advance='no') &
-      l, SNP_names(l), Threshold, i, pop(i)%ID, Gl(i), g_new, exp(Gprob(:,i))
+    prob_i = exp(Gprob(:,i))
+    WHERE (prob_i < exp(-227d0))  prob_i = 0d0   ! else issues with reading back + ridiculous precision
+    write(log_unit, '(1p, i9,2x,a40,2x,g10.3,2x,i9,2x,a40,2(i5,2x), 3g10.3,2x)', advance='no') &
+      l, SNP_names(l), Threshold, i, pop(i)%ID, Gl(i), g_new, prob_i
     if (method=='full') then
-      write(unit_log, '(2(3f9.5,2x))')  exp(lp_ant(:,i)), exp(get_post(i))
+      write(log_unit, '(1p, 2(3g10.3,2x))')  exp(lp_ant(:,i)), exp(get_post(i))
     else
-      write(unit_log, *)   ! line break
+      write(log_unit, *)   ! line break
     endif
 
-  end subroutine write_log
+  end subroutine write_editlog
+  
+  
+  !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  ! read number of edits per SNP from log file 
+  !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  subroutine prelim_read_edits(editFile)   ! TODO: rename subroutine
+    ! NOTE: DOES NOT WORK IF EDITS OF 1 SNP ARE SPREAD ACROSS MULTIPLE CHUNKS  >> fixed with R script
+    use sqa_fileIO, only: FileNumRow 
+    use pedigree_fun, only: get_index
+    character(len=*), intent(IN) :: editFile
+    integer :: l, nrow,  x, lx,ix, z
+    character(len=nchar_ID) :: lx_name, id_name
+    real :: dumR
+    
+    l = 1
+    nrow = FileNumRow(trim(editFile)) -1  ! 1st row = header
+    if (nrow==0)  return
+    
+    open(42, file=trim(editFile), action='read')
+    read(42,*)   ! header
+      do x=1,nrow
+        read(42,*) lx, lx_name, dumR, ix, id_name
+        
+        if (lx_name == SNP_names(l)) then
+          n_edits_in(l) = n_edits_in(l) +1
+        else
+          do z=l+1,nSnp
+            if (lx_name == SNP_names(z)) then
+              l = z
+              n_edits_in(l) = n_edits_in(l) +1
+              exit
+            endif
+          enddo
+        endif
+        
+        ! match ids on name rather than on rownumber in genotype file used to create --edits-in file
+        if (editsIN_IDs(ix) /= 0)  cycle   ! name already matched
+        editsIN_IDs(ix) = get_index(id_name)     
+      enddo
+    close(42)   
+    
+  end subroutine prelim_read_edits
+  
+  
+  !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  ! set those in --edits-in to be skipped, unless parent-of-new
+  !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  subroutine set_skip()
+    use pedigree_fun, only: pop, pedigree, get_par
+    integer :: i, k, g, par(2), m
+    integer, pointer :: offspring(:), mm(:), parp(:)
+    
+    skip(0:nIndT) = .FALSE.
+    
+    ! first pass: in --edits-in --> skip
+    do i=1,nIndT
+      if (any(editsIN_IDs == i))  skip(i) = .TRUE.
+    enddo
+        
+    ! second pass: 
+    ! A: if any offspring not skipped, do not skip
+    do i=1,nIndT      
+      if (.not. skip(i))  cycle
+      mm => pop(i)%offspring_m   ! matingnodes with its offspring
+      do k=1,SIZE(mm)         
+        offspring => pedigree(mm(k))%offspring 
+        parp => pedigree(mm(k))%parent
+        if (any (.not. skip( offspring )))   skip(i) = .FALSE.
+        if (.not. skip(i))  exit
+      enddo
+    enddo
+        
+    ! third pass: descendant if any not skipped, do not skip
+    do g=1,3  ! generations
+      do i=1,nIndT
+        if (.not. skip(i))  cycle
+        par = get_par(i)
+        if (any (.not. skip( par ))) then
+          skip(i) = .FALSE.
+          exit
+        endif  
+      enddo
+    enddo
+    
+    ! fourth pass: matings to skip
+    skipm(0:nMatings) = .FALSE.
+    do m=1,nMatings
+      offspring => pedigree(m)%offspring
+      parp => pedigree(m)%parent
+      if (all( skip( offspring )) .and. all( skip( parp )))   skipm(m) = .TRUE.
+    enddo
+    
+    ! TODO: mates of individuals not in editsIN_IDs?
+     
+  end subroutine set_skip
+  
+  
+  !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  ! read edits from log file 
+  !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  subroutine read_editlog(l, editsIN_unit, readin_mode)
+    use pedigree_fun, ONLY: no_index
+    integer, intent(IN) :: l, editsIN_unit, readin_mode  ! 0=geno, 1= +Gprob, 2= + ant & post
+    
+    integer :: x, lx, ix, ios, i, z
+    real :: dumR
+    character(len=40) :: lx_name, id_name
+    integer(kind=ishort) :: g_in, g_out
+    double precision :: Gprob_tmp(3), ant_tmp(3)!, post_tmp(3)
+
+    do x=1, n_edits_in(l)
+      do z=1, 10000  ! max as safety net only
+        if (readin_mode<2) then
+          read (editsIN_unit,*, iostat=ios) lx, lx_name, dumR, ix, id_name, g_in, g_out, Gprob_tmp(1:3)
+        else
+          read (editsIN_unit,*, iostat=ios) lx, lx_name, dumR, ix, id_name, g_in, g_out, &
+           Gprob_tmp(1:3), ant_tmp(1:3)!, post_tmp(1:3)
+        endif
+        if (ios < 0)  exit   ! end of file
+        if (lx_name == SNP_names(l)) exit  ! correct SNP; else read next line
+      enddo
+      if (ios < 0)  exit   ! end of file
+      
+      ! match ids on name rather than on rownumber in genotype file used to create --edits-in file
+      i=editsIN_IDs(ix)    
+      if (i==no_index)  cycle   ! individual not in current genotype file
+      ! if (Gl(i) /= g_in) then  ! DEBUG
+        ! print *, 'g_in in editfile does not match genotype matrix!'
+        ! print *, 'at line ', x, ': ', trim(lx_name), ' ', trim(id_name), &
+         ! ' in: ', g_in, ' out: ', g_out, '; now: ', Gl(i)
+        ! print *, 'i_edit: ', ix, ',  i_geno: ', i, ' > ID_geno: ', IdV(i)
+         
+        ! stop  
+      ! endif
+      
+      if (readin_mode == 0) then
+        Gl(i) = g_out  
+      else 
+        Gprob(:,i) = log(Gprob_tmp(:)) 
+        if (MAXVAL(Gprob(:,i)) > 0.99 .or. g_out==-1) then   
+          ! TODO: make threshold depend on err
+          ! TODO: write these edits to a separate log file?
+          Gl(i) = g_out 
+        endif
+      endif
+      if (readin_mode ==2) then
+        lp_ant(:,i) = log(ant_tmp(:))
+        ! lp_post is per mating, so not easily read back. TODO: write to separate edits file?
+      endif     
+    enddo     
+
+  end subroutine read_editlog
   
   
   !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1182,28 +1469,34 @@ contains
     integer :: r,x,i,m
        
     do r=1,r_max
+!      if (.not. quiet)  write(*,'(i3)', advance='no')  r   !DEBUG
       Gprob_prev = Gprob
               
       ! peel down
       do x=1,nIndT
         i = Gen_rank_down(x)
+        if (skip(i))  cycle  ! for skips lp_ant comes from --edits-in
+        if (indiv2mating(i) == 0)  cycle   ! founder; anterior prob does not change
         lp_ant(:,i) = calc_p_ant(i)
       enddo  
                
       ! peel up
       do x=1,nMatings
         m = Gen_rank_up(x)
+        if (r>1 .and. skipm(m))  cycle
         lp_post(:,:,m) = calc_p_post(m)
       enddo 
                                  
-      ! calc genotype probabilities
+      ! calc genotype probabilities  (for skips they come from --edits-in)
       do i=1,nIndT
+        if (skip(i))  cycle
         Gprob(:,i) = calc_g_prob(i)
       enddo
  
       ! check for convergence
       if (all(abs(Gprob - Gprob_prev) < tol))  exit
     enddo
+ !   if (.not. quiet)  print *,''  ! line break
 
   end subroutine peeler
   
@@ -1246,46 +1539,6 @@ contains
     end function quick_p_ant
 
   end subroutine quick_set_ant 
-  
-  
-  !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-  ! apply edits in log file to Geno & write to file
-  !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-  subroutine apply_edits(editFile, GenoOutFile, GenoOutFormat)
-    use sqa_fileIO
-    use global_variables, ONLY: IdV
-    
-    character(len=*), intent(IN) :: editFile, GenoOutFile, GenoOutFormat
-    integer :: i, l, x, N_edits
-    integer(kind=ishort) :: g_in, g_out
-    character(len=40) :: dumC(2)
-    real :: dumR
-    
-    call CheckFile(trim(editFile))    
-    N_edits = FileNumRow(trim(editFile)) -1  ! 1st row = header
-    
-    print *, 'applying ', N_edits, ' edits to genotype file ...'
-    
-    open (5, file=trim(editFile), action='read')
-      read (5,*)  ! header
-      do x=1, N_edits
-        read (5,*) l, dumC(1), dumR, i, dumC(2), g_in, g_out 
-        if (geno(i,l) == g_in) then
-          geno(i,l) = g_out
-        else
-          print *, 'g_in in editfile does not match genotype matrix!'
-          print *, 'at line ', x, ': ', dumC, ' in: ', g_in, ' out: ', g_out
-          stop  
-        endif
-      enddo   
-    close(5)  
-
-    ! write to file  (excl indiv 0)
-    call write_geno(Geno=transpose(geno(1:,:)), nInd=SIZE(geno,DIM=1)-1, nSnp=SIZE(geno,DIM=2),&
-      ID=IdV, SNP_names=SNP_names, FileName=GenoOutFile, FileFormat=GenoOutFormat)
-  
-  end subroutine apply_edits
-
 
 !submodule (impute_fun) prob_ant_pos  !Gprob_mod   
 !  use sqa_general, ONLY: ishort, logSumExp, logScale, OcA, AKA2P, AHWE
@@ -1317,10 +1570,10 @@ contains
     integer :: p, x,y, par_q(2), u, m
 
     m = indiv2mating(i)
-    if (m==0) then
-      calc_p_ant = lAHWE
-      return
-    endif
+   ! if (m==0) then    ! check done in peeler()
+     ! calc_p_ant = lAHWE   
+     ! return
+   ! endif
     par_q = pedigree(m)%parent  
     do p=1,2
       part_par(:,p) = lp_ant(:,par_q(p)) + lOcA(:,Gl(par_q(p))) + &
@@ -1374,6 +1627,7 @@ contains
     
   end function calc_p_post
   
+  
   !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   ! calc g_i(obs|act) * prod_k(ppost_ik) over mates k
   !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1409,7 +1663,7 @@ contains
       endif
       post_per_mate(:,k) = lp_post(:, psex, mates(k))
     enddo    
-    mates_post = SUM(post_per_mate, DIM=2)
+    mates_post = SUM(post_per_mate, DIM=2)  
 
   end function mates_post
   
@@ -1484,14 +1738,12 @@ program main
   use impute_fun
   implicit none
   
- ! integer :: i
-  character(len=nchar_filename) :: GenoFile, PedigreeFile, AFFile, GenoOutFile, EditsFile
+  character(len=nchar_filename) :: GenoFile, PedigreeFile, AFFile, GenoOutFile, &
+   EditsFile_IN, EditsFile_OUT
   character(len=3) :: GenoInFormat, GenoOutFormat
   real :: Threshold_pedclean
   logical :: do_pedclean, do_pedigree, mk_pedigree_object
   double precision :: Er, ErV(3)
-!  integer :: i,m
-!  integer, allocatable :: mates(:)
     
   call read_args()   ! set defaults & read command line arguments
   
@@ -1516,7 +1768,7 @@ program main
   endif
   if (mk_pedigree_object)  call init_pedigree()  
   
-  if (do_pedclean .or. do_snpclean .or. do_impute) then  ! not if do_read_edits
+  if (do_pedclean .or. do_snpclean .or. do_impute) then  ! not if only_read_edits
     allocate(AF(nSnp))
     AF = getAF(AFFile, GenoInFormat) 
     allocate(OcA(0:2,-1:2))
@@ -1526,22 +1778,24 @@ program main
       OcA = mk_OcA(Er, ErrFlavour='2.9')
     endif 
     call InheritanceProbs(nSnp, AF, OcA)   
+    
+    if (.not. quiet)  write(*,'(1p, "Genotyping error rate: ", g8.2, "  (", 3g9.2, ")")')  Er, &
+      OcA(0,2), OcA(0,1), OcA(1,2)  ! hom|other hom, het|hom, and hom|het
   endif
+
   
   if (do_pedclean) then
     if (.not. quiet)  call printt('cleaning pedigree ... ')   
     call clean_pedigree('pedclean_edits.txt', Threshold_pedclean)
   endif
   
-  if (do_pedclean .or. do_snpclean .or. do_impute) then 
-    call clean_n_impute(EditsFile)  
+  ! this is the workhorse !
+  call clean_n_impute(EditsFile_OUT, EditsFile_IN)    
+  
+  if (do_geno_out) then
     if (.not. quiet)  call printt('writing new genotypes to file ...')
     call write_geno(Geno=transpose(geno(1:,:)), nInd=SIZE(geno,DIM=1)-1, nSnp=SIZE(geno,DIM=2),&
       ID=IdV, SNP_names=SNP_names, FileName=GenoOutFile, FileFormat=GenoOutFormat)
-  
-  else if (do_geno_out) then
-    if (.not. quiet)  call printt('writing new genotypes to file ...')
-    call apply_edits(EditsFile, GenoOutFile, GenoOutFormat)
   endif
   
   if (.not. quiet)  call printt('done.')
@@ -1559,10 +1813,10 @@ contains
     use sqa_fileIO, only: valid_formats
     use sqa_general, only: paste
     integer :: nArg, i, x, z
-    character(len=32) :: arg, argOption, FN_lbls(5)
+    character(len=32) :: arg, argOption, FN_lbls(6)
     character(len=10) :: valid_methods(6)
-    character(len=nchar_filename) :: FN(5)
-    logical :: only_read_edits    
+    character(len=nchar_filename) :: FN(6)
+    logical :: only_read_edits, file_exists  
     
     ! set defaults
     GenoFile = 'Geno'
@@ -1572,13 +1826,14 @@ contains
     AFFile = 'NoFile'
     GenoOutFile = 'geno_imputed'
     GenoOutFormat = 'SEQ'
-    EditsFile = 'imputation_edits.txt'
+    EditsFILE_IN = 'NoFile'
+    EditsFile_OUT = 'imputation_edits.txt'
     Er = 0.001
     ErV = (/ 0.0d0, 0.0d0, 0.0d0 /)  ! hom|other hom, het|hom, and hom|het
     do_pedclean = .TRUE.
     Threshold_pedclean = 0.01
     do_snpclean = .TRUE.
-    Threshold_snpclean = 0.01
+!    Threshold_snpclean = 0.01
     do_impute = .TRUE.
     do_impute_all = .FALSE.
     Threshold_impute = 0 !0.9
@@ -1665,11 +1920,7 @@ contains
                                  
           case ('--T-snpclean')
             i = i+1
-            call get_command_argument(i, argOption)
-            read(argOption, *)  Threshold_snpclean
-            if (Threshold_snpclean < 0.0 .or. Threshold_snpclean > 1.0) then
-              call ErStop('--T-snpclean must be between 0 and 1, inclusive', .FALSE.)
-            endif
+            print *, '--T-snpclean is ignored, and now calculated based on --err'
             
           case ('--no-snpclean')
             do_snpclean = .FALSE.
@@ -1734,14 +1985,16 @@ contains
          
           case ('--edits', '--edits-out')
             i = i+1
-            call get_command_argument(i, EditsFile)
+            call get_command_argument(i, EditsFile_OUT)
             
           case ('--no-edits-out')
             with_log = .FALSE.
             
           case ('--edits-in')
             i = i+1
-            call get_command_argument(i, EditsFile)
+            call get_command_argument(i, EditsFile_IN)
+            
+          case ('--only-apply-edits')
             only_read_edits = .TRUE.
 
           case ('--quiet')
@@ -1784,15 +2037,21 @@ contains
     endif
     
     ! check if valid filename
-    FN = (/GenoFile, PedigreeFile, AFFile, GenoOutFile, EditsFile/)
-    FN_lbls = [character(len=32) :: '--geno-in', '--pedigree', '--freq', '--geno-out', '--edits-out']
-    do i=1,5
+    FN = (/GenoFile, PedigreeFile, AFFile, GenoOutFile, EditsFile_IN, EditsFile_OUT/)
+    FN_lbls = [character(len=32) :: '--geno-in', '--pedigree', '--freq', '--geno-out', &
+     '--edits-in', '--edits-out']
+    do i=1,6
       if (FN(i) == 'NoFile')  cycle
       if (len_trim(FN(i))==0) then
         call ErStop('Filename for '//trim(FN_lbls(i))//' may not be blank', .FALSE.)
       endif
-    enddo
-    
+      if (FN_lbls(i)=='--geno-in' .or. FN_lbls(i)=='--geno-out')  cycle  ! extension for genotype file added later
+      inquire(file=trim(FN(i)), exist = file_exists)
+      if (.not. file_exists) then
+        print *, 'File for '//trim(FN_lbls(i))//' not found: ', trim(FN(i))
+        stop
+      endif
+    enddo   
  
   end subroutine read_args
 
@@ -1817,7 +2076,7 @@ contains
     write(*,*) "Genotype frequencies: "
     write(*, '(4a7)') '0','1','2','?'
     write(*,'(4f7.3)') G_freq_all()
-    write(*,'("Missingness per SNP: min ", f7.3, "  max ", f7.3 )')  MINVAL(prop_missing), MAXVAL(prop_missing)
+    write(*,'("Missingness per SNP: min ", f7.3, "  max ", f7.3 )')  MINVAL(prop_missing), MAXVAL(prop_missing) 
     write(*,*) "========================="
 
   end subroutine print_sumstats 
@@ -1888,7 +2147,7 @@ contains
     endif
 
   end function getAF
-  
+
 end program main
 
 

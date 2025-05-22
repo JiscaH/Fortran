@@ -1,3 +1,6 @@
+## 0.4  2025-05-22
+- Make it possible to use --edits-in as a starting point for new imputations
+
 ## 0.3.7  2024-04-27
 - fix --impute-all : imputions for non-genotyped individuals were written to edits
 file but not to output genotype. Now added to bottom of genotype file. 

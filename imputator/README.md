@@ -4,7 +4,7 @@ This program imputes (fills in) missing SNP genotype data using a
 pedigree. Neither the pedigree nor the SNP data is assumed to be
 error-free. It is primarily intended to complete the genotype of
 partly-genotyped individuals, but can also impute non-genotyped
-individuals.                                               
+individuals.
 
 Each SNP is treated completely independently; for programs that use
 information from linked SNPs see e.g. Beagle or AlphaImpute.
@@ -22,9 +22,8 @@ information from linked SNPs see e.g. Beagle or AlphaImpute.
 -   run the program: `./imputator --geno <filename>`. For an overview of
     the options, run `./imputator --help`.
 
-> [!CAUTION]  
-> This program is under development and not extensively tested yet. Use is entirely at your own risk.
-
+> [!CAUTION]    
+> This program is still under development; use is entirely at your own risk.
 
 ## Methods overview
 
@@ -442,10 +441,9 @@ method described in [Kerr & Kinghorn, J. Anim. Breed. Genet., 1996](<https://www
 This probability depends on an individuals own genotype, the genotypes
 of its parents and full siblings and their mates (‘anterior
 probability’), and the genotypes of its offspring and their mates
-(‘posterior probability’). See
-`Kerr_Kinghorn_1996_equations_appendix.pdf` for a colour-coded
-reproduction of the equations in the paper, which corrects a few
-typesetting errors in the original.
+(‘posterior probability’). See `imputator_algorithm.pdf` for details,
+including a colour-coded reproduction of the equations in the paper,
+which corrects a few typesetting errors in the original.
 
 The anterior and posterior probability of each individual depend on
 those of many others, and can therefore not be calculated all at once.
@@ -505,11 +503,11 @@ further testing and optimising is needed).
 The iterative peeling step is done before the genotype cleaning step,
 and again between the genotype cleaning step and the imputation step.
 
-> [!NOTE]  
-> Genotyping cleaning is only available with `method=full`;
-with the other methods it is impossible to pinpoint whether a Mendelian
-inconsistency is due to a genotyping error in the parent or in the
-offspring.
+> [!NOTE]   
+> This genotyping cleaning is only available with `method=full`; with
+ the other methods it is impossible to pinpoint whether a Mendelian
+ inconsistency is due to a genotyping error in the parent, or in the
+ offspring.
 
 ------------------------------------------------------------------------
 
@@ -586,7 +584,7 @@ By default only ‘incidentally missing values’ are imputed, i.e. values
 in individuals which are included in the genotype file. With
 `--impute-all` all individuals in the pedigree file will be imputed.
 They are added to the bottom of the genotype file, in the order in which
-they are encountered in the pedigree.                                     
+they are encountered in the pedigree.
 
 ### `--tol`
 
@@ -607,8 +605,6 @@ file into N chunks, do the calculations on each chunk in parallel,
 combine the logfiles, and apply the full list of edits to the original
 genotype file.
 
-> [!NOTE]  
-> Not yet compatible with `--impute-all`.
 ## snpclean + imputation log
 
 By default a log file is created with a record for each edit made to the
@@ -646,12 +642,54 @@ large for the faster methods.
 
 > [!TIP]  
 > The edits log can later be combined with the original genotype file to
-an imputed genotype file, without having to run the imputation again.
-This can be done with `--edits-in`.
+ an imputed genotype file, without having to run the imputation again.
+ This can be done with `--edits-in --only-apply-edits`.
 
 # Algorithm details
 
-To write.
+See `imputator_algorithm.pdf` .
+
+# Read in edits
+
+When a new batch of samples is added to a dataset on which `imputator`
+has been run previously, time can be saved by using the previous
+imputation results as starting point. This can be done with
+`--geno <new_genofile> --edits-in <previous_edit_file> --out <new_imputed_genofile>`.
+From version 0.4 (May 2025), the `--edits-in` file is matched to the new
+genotype file based on SNP names and ID names, so that the previous and
+current genotype file may include different SNPs and IDs, and/or samples
+in a different order.
+
+However, to allow efficient reading in of the edits file, edits to each
+SNP must be in contiguous block, and the SNPs must be in the same order.
+So, if e.g. the SNPs in the current genotype data are named
+aa-bb-cc-ee-gg, then an edits file with SNPs in order aa-cc-dd-ee-ff-gg
+is OK, but one with aa-cc-bb-ee is not (edits to SNP bb will be
+skipped).
+
+## Skipping individuals
+
+The program will automatically skip any old individuals (those in the
+`--edits-in` file), except if they are
+
+-   the parent of a new individual
+-   the descendant if any non-skipped individual (up to 3 generations
+    down); this includes full- and half-siblings of new individuals
+
+## Genotypes and genotype probabilities
+
+When reading in the edits, any with a genotype probability  \> 0.99 will
+be treated as if that genotype was observed rather than imputed. Note
+that these will therefore not be included in the output edits file of
+such a run.
+
+All cases where previous genotype cleaning set g_out to missing, are set
+to missing. For the remainder, prob_x and p_ant_x read from file are
+used as starting point for the subsequent imputation. p_post_x can be a
+summation over multiple matings, and therefore reading this value back
+is not practical. The values for each mating could in theory be stored
+in a separate file, but since new individuals will often not have
+offspring, this is not (yet) implemented.
 
 # Future additions
 
